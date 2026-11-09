@@ -7,6 +7,7 @@ import (
 	"github.com/apron-chat/apron-server-go/apron"
 	"github.com/apron-chat/apron-server-go/store"
 	"github.com/coder/websocket"
+	"net/http"
 	"path/filepath"
 	"sync/atomic"
 	"testing"
@@ -63,6 +64,14 @@ func TestEnrollmentFailureAtomicAcrossRestart(t *testing.T) {
 		if frame["result"] != nil {
 			t.Fatal("enrollment acknowledged failed persistence")
 		}
+	}
+	response, err := http.Get(h.URL + "/healthz")
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if response.StatusCode != 503 {
+		t.Fatal("failed policy store still serves HTTP")
 	}
 	w.c.CloseNow()
 	h.Close()

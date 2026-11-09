@@ -45,6 +45,9 @@ func TestFreshServerClosed(t *testing.T) {
 		t.Fatal(err)
 	}
 	p := frame["params"].(map[string]any)
+	if signup, ok := p["signup"].([]any); !ok || len(signup) != 0 {
+		t.Fatal("closed enrollment advertises open signup")
+	}
 	for _, scheme := range p["auth"].([]any) {
 		if scheme == "guest" || scheme == "email" || scheme == "external" {
 			t.Fatalf("fresh server offers forbidden scheme %s", scheme)

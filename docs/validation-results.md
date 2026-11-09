@@ -54,3 +54,81 @@ Initial `npm audit --json`: 12 findings (5 low, 2 moderate, 4 high, 1 critical),
 and Markdown-it. A compatible lockfile update removes moderate/high/critical findings; the
 patched runtime `npm audit --omit=dev --audit-level=moderate` reports zero vulnerabilities.
 Remaining dev-only low findings are still tracked; full frontend test results pending.
+
+9. Native Python transport: focused `tests/test_transport.py::test_real_greeting_and_machine_authentication`
+   RED: native machine auth never completed; GREEN: v10 greeting, token authentication, exact bot role.
+10. Hermes authority: `test_only_allowed_structured_mentions_reach_hermes` RED: allowed structured
+    mention dropped; GREEN: configured immutable actor IDs and rooms, structured mentions, no echo,
+    bots, tombstones, edits, display-name mentions or administrative slash-command interception.
+    Setup first demonstrated that `Platform('apron')` needs real registry registration; tests now use
+    the pinned real `PluginManager`, `PluginContext`, registry and `BasePlatformAdapter`.
+11. `test_native_send_receipt_from_real_adapter` RED: adapter did not connect; GREEN: Markdown send
+    confirmed by real history readback, unauthorized destination refused.
+12. `test_real_human_invocation_with_hermes_handler` RED timed out without a receive worker;
+    GREEN: Chromium-enrolled human reaches a real BasePlatformAdapter message handler, no model calls.
+13. `test_offline_history_recovers_once_after_new_adapter` RED timed out on missing history recovery;
+    GREEN with bounded high-water recovery, private SQLite checkpoints and dispatch reservations.
+    An early cancelled receive worker leaked queue waiters; replacing it with cancellable bounded
+    waits removed the teardown exception. Reservations favor avoiding repeated tool execution:
+    process death after reserve can lose a turn. This is NOT exactly-once side-effect execution.
+14. `test_native_append_finishes_same_message` RED: edit Not supported;
+    GREEN: real append PUT, full-text revisions, completion and history show one message ID/final body.
+15. `test_native_upload_rejects_traversal_and_reads_back` RED: inherited Hermes fallback posted no
+    embed (and logged a path); GREEN: native upload, safe basename, flat private export directory,
+    traversal/symlink rejection. No HTTP client logs capability URLs.
+16. `test_standalone_delivery_coexists_with_consumer` RED: unavailable;
+    GREEN: separate native connection does not take the consumer lock. Separate-process CLI delivery
+    is also tested with receipt readback and the live consumer still usable.
+17. `test_typing_activity_is_native` RED timed out; GREEN native activity start and clear.
+18. `test_opt_in_terminal_summary_scrubs_runtime_credential` RED refused approved summary;
+    GREEN: explicit opt-in + per-call approval, bounded reviewed summary, ANSI stripping and known
+    runtime credential/capability URL scrubbing. No arbitrary tool-output hook or shell execution.
+19. `test_reconnect_replaces_transport_with_bounded_retry` RED timed out;
+    GREEN bounded retries/backoff, replacement transport, history recovery, send after reconnect.
+20. Security review regressions: scalar mentions RED incorrectly authorized; GREEN strict list shape.
+    Corrupt inbox RED raised DatabaseError and retained its lock; GREEN fails closed and releases it.
+    Unsupported open-ended clarification RED left a real Hermes waiter accepting arbitrary next text;
+    GREEN cancels that exact session/request. Other pending sessions remain untouched.
+21. Go security review: `TestMachineCannotAddHumanPasskey` RED offered registration to the bot;
+    GREEN denies human auth schemes for bots, preventing a second persistent machine auth path.
+    `TestEnrollmentFailureAtomicAcrossRestart` extended with HTTP: RED served after store fault;
+    GREEN returns 503 as well as closing WS. `TestFreshServerClosed` extended: RED advertised open
+    signup; GREEN advertises no open signup while retaining passkey login.
+22. Frontend local-mode test: RED copied a link through link.apron.chat; GREEN same-origin share links,
+    default WebSocket origin and no external terminal viewer in `VITE_LOCAL_ONLY=1` builds.
+    Four focused upstream frontend files: 51 tests PASS. Upstream defaults are unchanged outside local mode.
+
+`tools/test -q`: PASS, 24 tests (before the last added Go-only metadata regression), using pinned public
+Hermes source and a sanitized test environment. Includes real server/browser/plugin exchanges plus
+adversarial RPC ordering/timeouts/cancellation and redacted denied/retry errors. Synthetic protocol
+peers supplement, rather than replace, the real-server tests.
+
+Frontend checks after fetching its pinned protocol submodule: `npm run check` PASS (0 diagnostics).
+First full frontend run: 1689 PASS, 1 timeout at default 5s. Rerun with explicit 20s timeout:
+`npm test -- --testTimeout=20000`: 1690 PASS. Canvas warning is from jsdom and is not a claimed canvas test.
+Final local-mode build and full-suite results will be recorded below.
+
+`tools/frontend --test` with the final local frontend patch: PASS, 200 files / 1691 tests;
+Svelte check 0 diagnostics; runtime audit 0 vulnerabilities; static build PASS. Development-only
+low-severity SvelteKit/cookie/deepmerge findings remain (5); no claim they were fixed.
+`tools/upstream-test`: PASS under race detection for patched real `apron`, `aproncmd`, `store`,
+with the pinned protocol fixtures initialized. No unit-only substitution for the server.
+`tools/go test -race ./...`: PASS after the bot-passkey, fault-HTTP and signup metadata fixes.
+`tools/test tests/test_adapter.py -k two_private -q`: PASS: two private rooms and two child threads,
+concurrent real Hermes handlers, native sends/replies and per-room history readback stay isolated.
+`tools/test tests/test_browser.py -k pinned_frontend -q`: PASS: actual pinned self-hosted Svelte client,
+virtual passkey login and native chat render/send; HTTP and WebSocket requests stay on the local origin.
+An initial selector guessed `connect-submit`; inspection found `passkey-login` and `message-input`.
+That fixture failure is not a production-behavior RED.
+
+23. `test_same_credential_cannot_start_second_consumer_profile`: RED allowed two consumers with
+    different state directories; GREEN uses the real Hermes scoped credential reservation plus
+    same-process exclusion. Standalone send-only delivery remains allowed. Test lock rendezvous is
+    explicitly redirected to private scratch; the installed gateway's lock/state is not accessed.
+24. `TestClosedWrapperRequiresDurableSQLiteCommits` in the pinned store: RED reported synchronous=1
+    (NORMAL); GREEN after the documented FULL override reports 2. This tests the actual connection
+    pragma, not a string match; it does not simulate hardware power loss.
+
+Additional regressions cover core-only capability fallback (no fabricated optional RPCs), canary
+absence from captured server logs/SQLite/generated binary, private credential/socket modes,
+real plugin-loader import and profile-scoped passive config validation.

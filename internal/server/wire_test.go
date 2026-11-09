@@ -313,3 +313,22 @@ func TestSeparateMachineIdentityRevocable(t *testing.T) {
 	}
 	denied(t, dial(t, h.URL).call(t, "auth", map[string]any{"scheme": "token", "token": e.machine}))
 }
+
+func TestMachineCannotAddHumanPasskey(t *testing.T) {
+	cfg := SecureConfig()
+	e := &enrolling{machine: rand.Text() + rand.Text()}
+	cfg.Extensions = []apron.Extension{e}
+	cfg.UploadDir = t.TempDir()
+	cfg.OriginPatterns = []string{origin}
+	cfg.WebAuthn, _ = webauthn.New(&webauthn.Config{RPID: "localhost", RPDisplayName: "Test", RPOrigins: []string{origin}})
+	s, err := apron.Open(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := httptest.NewServer(s)
+	defer s.Shutdown(context.Background())
+	defer h.Close()
+	w := dial(t, h.URL)
+	result(t, w.call(t, "auth", map[string]any{"scheme": "token", "token": e.machine}))
+	denied(t, w.call(t, "auth", map[string]any{"scheme": "webauthn", "action": "register", "step": "begin"}))
+}

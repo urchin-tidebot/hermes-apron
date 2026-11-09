@@ -13,7 +13,7 @@ index 274b0be..0e593ca 100644
  	case s.allowlist == nil, u.botOf != "":
  		return true
 diff --git a/apron/auth.go b/apron/auth.go
-index 7167e84..3b325d3 100644
+index 7167e84..a9e6018 100644
 --- a/apron/auth.go
 +++ b/apron/auth.go
 @@ -169,7 +169,7 @@ func (s *Server) restoreSchemesLocked() error {
@@ -25,7 +25,18 @@ index 7167e84..3b325d3 100644
  		s.unlock()
  		return nil, connectionClosing()
  	}
-@@ -222,6 +222,29 @@ func (s *Server) authenticate(c *client, req request) (any, *Error) {
+@@ -194,6 +194,10 @@ func (s *Server) authenticate(c *client, req request) (any, *Error) {
+ 		// invalid_params (§1).
+ 		err = invalidParams("Unknown authentication scheme %q", name)
+ 	}
++	if s.enrollment != nil && c.user != nil && c.user.botOf != "" && name != "token" {
++		s.unlock()
++		return nil, notAdmitted()
++	}
+ 	// A user_id is never empty, nor contains whitespace or control
+ 	// characters (§2.4): requesting one that could be no user_id is
+ 	// invalid_params, with any scheme. One that could be, but that this
+@@ -222,6 +226,29 @@ func (s *Server) authenticate(c *client, req request) (any, *Error) {
  		return nil, err
  	}
  	r := s.authRequestLocked(c, req, scheme, requestedName, requested)
@@ -55,7 +66,7 @@ index 7167e84..3b325d3 100644
  	s.unlock()
  
  	result, schemeErr := scheme.Auth(s.requestContext(c), r)
-@@ -234,7 +257,7 @@ func (s *Server) authenticate(c *client, req request) (any, *Error) {
+@@ -234,7 +261,7 @@ func (s *Server) authenticate(c *client, req request) (any, *Error) {
  	}
  	s.mu.Lock()
  	defer s.unlock()
@@ -64,7 +75,14 @@ index 7167e84..3b325d3 100644
  		return nil, connectionClosing()
  	}
  	switch result := result.(type) {
-@@ -407,7 +430,7 @@ func (s *Server) signInProvenLocked(c *client, req request, scheme authn.Scheme,
+@@ -403,11 +430,14 @@ func (s *Server) signInProvenLocked(c *client, req request, scheme authn.Scheme,
+ 	}
+ 	now := time.Now()
+ 	owner := s.accounts[id]
++	if s.enrollment != nil && owner != nil && owner.botOf != "" {
++		return nil, notAdmitted()
++	}
+ 	if owner == nil {
  		switch {
  		case !create:
  			return nil, &Error{Code: CodeDenied, Message: "This " + scheme.Label() + " belongs to no account"}
@@ -73,7 +91,7 @@ index 7167e84..3b325d3 100644
  			return nil, notAdmitted()
  		}
  		record, err := commit(proof)
-@@ -419,6 +442,12 @@ func (s *Server) signInProvenLocked(c *client, req request, scheme authn.Scheme,
+@@ -419,6 +449,12 @@ func (s *Server) signInProvenLocked(c *client, req request, scheme authn.Scheme,
  		s.setIdentityLocked(user, id, record)
  		s.setGrantLocked(user, id.Scheme, proof.Roles)
  		s.grantRolesLocked(user)
@@ -86,7 +104,7 @@ index 7167e84..3b325d3 100644
  		// A new account joins the default room, as a new guest does,
  		// after the result (§3.2.2).
  		return s.signInLocked(c, req, user, now, true, true)
-@@ -703,7 +732,7 @@ func (sc *schemeConn) ProposePage(spec authn.PageProposal) (string, error) {
+@@ -703,7 +739,7 @@ func (sc *schemeConn) ProposePage(spec authn.PageProposal) (string, error) {
  // takes one of the connection's proposals (proposalsPerConnection).
  func (sc *schemeConn) proposeLocked(state, returnURL string) (*proposal, *authn.Error) {
  	s, c := sc.s, sc.c
@@ -342,7 +360,7 @@ index 6838bc8..37d7f24 100644
  }
  
 diff --git a/apron/server.go b/apron/server.go
-index 9a507d0..14dc195 100644
+index 9a507d0..6c320c7 100644
 --- a/apron/server.go
 +++ b/apron/server.go
 @@ -439,8 +439,9 @@ func (t wsTransport) ping(ctx context.Context) error { return t.ws.Ping(ctx) }
@@ -377,7 +395,31 @@ index 9a507d0..14dc195 100644
  	return s, nil
  }
  
-@@ -1366,7 +1373,7 @@ func (s *Server) processFrame(c *client, payload []byte) {
+@@ -830,6 +837,13 @@ func (f staticFS) Open(name string) (http.File, error) {
+ 
+ // ServeHTTP serves the Handler, so a Server is an http.Handler.
+ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
++	s.mu.RLock()
++	failed := s.storeFailed
++	s.mu.RUnlock()
++	if failed {
++		http.Error(w, "persistence unavailable; restart required", http.StatusServiceUnavailable)
++		return
++	}
+ 	s.handler.ServeHTTP(w, r)
+ }
+ 
+@@ -1092,6 +1106,9 @@ func (s *Server) serverParams(baseURL string, revealed bool) map[string]any {
+ 	// one but token, which only resumes one. A passkey registered by a
+ 	// guest makes the guest an account, and email and guest start one.
+ 	signup := slices.DeleteFunc(slices.Clone(authSchemes), func(scheme string) bool { return scheme == "token" })
++	if s.enrollment != nil {
++		signup = []string{}
++	} // Invitations use only the local enrollment UI.
+ 	params := map[string]any{
+ 		"apron":        10,
+ 		"agent":        "apron-go/10",
+@@ -1366,7 +1383,7 @@ func (s *Server) processFrame(c *client, payload []byte) {
  	s.mu.Lock()
  	// A connection being closed, as when its account is signed out, does
  	// nothing more: the frames it sent before are dropped.
@@ -533,3 +575,43 @@ index a099f56..b23e265 100644
  	// Params are the request's params: a copy.
  	Params map[string]jsontext.Value
  	// Name and UserID are what the request asks for a new account, as the
+diff --git a/store/durability_test.go b/store/durability_test.go
+new file mode 100644
+index 0000000..8e48d86
+--- /dev/null
++++ b/store/durability_test.go
+@@ -0,0 +1,21 @@
++package store
++
++import (
++	"path/filepath"
++	"testing"
++)
++
++func TestClosedWrapperRequiresDurableSQLiteCommits(t *testing.T) {
++	s, err := OpenSQLite(filepath.Join(t.TempDir(), "state.db"))
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer s.Close()
++	var policy int
++	if err = s.db.QueryRow("PRAGMA synchronous").Scan(&policy); err != nil {
++		t.Fatal(err)
++	}
++	if policy != 2 {
++		t.Fatalf("SQLite synchronous policy = %d; want FULL (2)", policy)
++	}
++}
+diff --git a/store/sqlite.go b/store/sqlite.go
+index a1f118f..335f777 100644
+--- a/store/sqlite.go
++++ b/store/sqlite.go
+@@ -31,7 +31,7 @@ func OpenSQLite(path string) (*SQLite, error) {
+ 			return nil, err
+ 		}
+ 	}
+-	dsn := "file:" + path + "?_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(ON)"
++	dsn := "file:" + path + "?_pragma=journal_mode(WAL)&_pragma=synchronous(FULL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(ON)"
+ 	db, err := sql.Open("sqlite", dsn)
+ 	if err != nil {
+ 		return nil, err

@@ -218,7 +218,7 @@ func serve(settings server.Settings) error {
 		return errors.New("server initialization failed")
 	}
 	defer app.Shutdown(context.Background())
-	srv := &http.Server{Handler: app, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 6 * time.Minute, IdleTimeout: 30 * time.Second, MaxHeaderBytes: 8192}
+	srv := &http.Server{Handler: server.LocalHeaders(app, settings.PublicURL), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 6 * time.Minute, IdleTimeout: 30 * time.Second, MaxHeaderBytes: 8192}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	done := make(chan error, 1)
