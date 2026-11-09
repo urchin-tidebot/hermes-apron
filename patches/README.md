@@ -25,3 +25,10 @@ credentials stay revoked on a restart with the same runtime file. Device token c
 because upstream tokens have no expiry. Human session resume retains its original absolute expiry.
 
 This remains a project patch, not an upstream-supported release or an audited security boundary.
+
+Additional review fixes keep signup metadata closed, stop HTTP after persistence failure,
+forbid machine accounts adding human credentials, and require bot membership at the server's
+message commit boundary. SQLite uses synchronous FULL (with an actual connection pragma test).
+Human token expiry limits new resumption; active sockets still require explicit revocation/closure.
+The workspace pins current dependency security fixes above the original module minimums; see
+[provenance](../docs/provenance.md). These controls have regression tests but remain unaudited.

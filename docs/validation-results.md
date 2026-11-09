@@ -132,3 +132,27 @@ That fixture failure is not a production-behavior RED.
 Additional regressions cover core-only capability fallback (no fabricated optional RPCs), canary
 absence from captured server logs/SQLite/generated binary, private credential/socket modes,
 real plugin-loader import and profile-scoped passive config validation.
+
+25. Cross-room edit regression: `test_edit_is_bound_to_original_room` RED moved a message to another
+    configured conversation; GREEN binds editable message IDs to their original room (bounded map).
+    `TestMachineMustBeJoinedToPost` RED allowed implicit post/rejoin after leave; GREEN checks actual
+    bot membership under the upstream commit lock, without changing ordinary upstream guest behavior.
+26. Dependency audit: initial `tools/go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...` under
+    Go 1.27.0 reported 13 reachable standard-library advisories, plus unused module findings.
+    Compiler pin changed to Go 1.27.3; x/net updated to v0.62.0 and x/crypto to the verified official
+    fix pseudo-version v0.58.1-0.20261009181718-2f1f834330b2. The requested stable v0.59.0 crypto
+    did not exist and was not used. Final verbose audit: no vulnerabilities at symbol/package/module
+    levels. This is an advisory database result, not independent security review.
+    OSV querybatch for the 40 registry packages in final uv.lock: 40 queried, zero findings (2026-11-09).
+    Removed an unused HTTP client dependency; native capability writes use bounded stdlib I/O without URL logging.
+
+`nix shell nixpkgs#gitleaks --command gitleaks dir --redact --no-banner --exit-code 1 .`: PASS.
+`nix shell nixpkgs#gitleaks --command gitleaks git --redact --no-banner --log-opts='b899490..HEAD' .`: PASS
+at the time (4 implementation commits); final added history is rescanned below. No secret-content output
+or raw Codex/test transcripts are committed. The custom audit checks private addresses/state paths too.
+
+27. `TestCredentialFIFOIsRejectedWithoutBlocking` RED blocked startup on a non-regular credential
+    file; GREEN after no-follow/nonblocking open, preserving the regular/private/owned file checks.
+28. Proxy example: `nix shell nixpkgs#caddy --command caddy adapt --config examples/lan-proxy.Caddyfile --adapter caddyfile`
+    PASS syntax adaptation using Caddy 2.11.7, with a formatting warning. No listener, certificate load,
+    TLS trust, firewall policy or network isolation test was performed. Documentation addresses only.

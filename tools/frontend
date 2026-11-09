@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+set -euo pipefail
+cd "$(dirname "$0")/.."
+frontend_source="$(python3 tools/prepare.py web)"
+cd "$frontend_source"
+git submodule update --init --depth 1 >&2
+npm ci --ignore-scripts >&2
+npm run prepare >&2
+npm run check >&2
+npm audit --omit=dev --audit-level=moderate >&2
+if [[ "${1:-}" == "--test" ]]; then
+  npm test -- --testTimeout=20000 >&2
+fi
+VITE_LOCAL_ONLY=1 VITE_DEFAULT_SERVER_URL='' npm run build >&2
+mkdir -p build/licenses
+cp LICENSE build/licenses/apron-web-MIT.txt
+cp src/lib/assets/fonts/OFL-*.txt build/licenses/
+printf '%s\n' "$frontend_source/build"

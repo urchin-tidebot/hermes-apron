@@ -3,5 +3,5 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 export GOWORK
 GOWORK="$(python3 tools/prepare.py server)"
-export GOTOOLCHAIN=go1.27.0
+export GOTOOLCHAIN=go1.27.3
 exec go "$@"

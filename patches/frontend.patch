@@ -708,3 +708,89 @@ index 537576b..96bec5c 100644
  			}
  		},
  		"node_modules/xml-name-validator": {
+diff --git a/src/lib/protocol/client-views.ts b/src/lib/protocol/client-views.ts
+index ff81e08..1c7150f 100644
+--- a/src/lib/protocol/client-views.ts
++++ b/src/lib/protocol/client-views.ts
+@@ -303,7 +303,7 @@ export function webPushKey(server: ServerParams | undefined): string | undefined
+ export function defaultWebSocketUrl(locationLike?: Location): string {
+ 	// `?.`: outside Vite (plain Node) there is no `import.meta.env`.
+ 	const configured = import.meta.env?.VITE_DEFAULT_SERVER_URL;
+-	if (configured) return configured;
++	if (configured && import.meta.env?.VITE_LOCAL_ONLY !== '1') return configured;
+ 	if (!locationLike) return 'ws://localhost:8080/ws';
+ 	const protocol = locationLike.protocol === 'https:' ? 'wss:' : 'ws:';
+ 	return `${protocol}//${locationLike.host}/ws`;
+diff --git a/src/lib/ui/apron-link.ts b/src/lib/ui/apron-link.ts
+index d5f63a7..c7d44c9 100644
+--- a/src/lib/ui/apron-link.ts
++++ b/src/lib/ui/apron-link.ts
+@@ -35,6 +35,7 @@ export interface ApronLink {
+ }
+ 
+ const WEB_ORIGIN = 'https://link.apron.chat';
++const localOrigin = () => import.meta.env?.VITE_LOCAL_ONLY === '1' && typeof location !== 'undefined' ? location.origin : WEB_ORIGIN;
+ const URI_PREFIX = 'apron:?';
+ /** The keys this app reads besides `server`; any other is ignored (Appendix A.4). */
+ const KEYS = ['room', 'message', 'user', 'token', 'state'] as const;
+@@ -137,7 +138,7 @@ function rawKeysOf(href: string): string | undefined {
+ 	}
+ 	try {
+ 		const url = new URL(href);
+-		return url.origin === WEB_ORIGIN && url.pathname === '/' && !url.search && url.hash.length > 1 ? url.hash.slice(1) : undefined;
++		return url.origin === localOrigin() && url.pathname === '/' && !url.search && url.hash.length > 1 ? url.hash.slice(1) : undefined;
+ 	} catch {
+ 		return undefined;
+ 	}
+@@ -155,7 +156,7 @@ function formDecode(value: string): string | undefined {
+ /** The link to share for a place on `server`, in the `https` form (Appendix A.4). */
+ export function writeApronLink(link: Pick<ApronLink, 'room' | 'message' | 'user'> & { server: string }): string {
+ 	const entries: [string, string | undefined][] = [['server', withoutCredentials(link.server)], ['room', link.room], ['message', link.room ? link.message : undefined], ['user', link.user]];
+-	return `${WEB_ORIGIN}/#${formKeys(entries.filter((entry): entry is [string, string] => entry[1] !== undefined))}`;
++	return `${localOrigin()}/#${formKeys(entries.filter((entry): entry is [string, string] => entry[1] !== undefined))}`;
+ }
+ 
+ /** The key list of a link in either of its forms. */
+@@ -163,7 +164,7 @@ function keysOf(href: string): URLSearchParams | undefined {
+ 	if (href.toLowerCase().startsWith(URI_PREFIX)) return new URLSearchParams(href.slice(URI_PREFIX.length));
+ 	try {
+ 		const url = new URL(href);
+-		return url.origin === WEB_ORIGIN && url.pathname === '/' && url.hash.length > 1 ? new URLSearchParams(url.hash.slice(1)) : undefined;
++		return url.origin === localOrigin() && url.pathname === '/' && url.hash.length > 1 ? new URLSearchParams(url.hash.slice(1)) : undefined;
+ 	} catch {
+ 		return undefined;
+ 	}
+diff --git a/src/lib/ui/local-only.test.ts b/src/lib/ui/local-only.test.ts
+new file mode 100644
+index 0000000..be0aa6b
+--- /dev/null
++++ b/src/lib/ui/local-only.test.ts
+@@ -0,0 +1,15 @@
++// @vitest-environment jsdom
++import { afterEach, expect, it, vi } from 'vitest';
++import { writeApronLink, readApronLink } from './apron-link';
++import { terminalPageUrl } from './terminal-page';
++import { defaultWebSocketUrl } from '$lib/protocol/client-views';
++afterEach(() => vi.unstubAllEnvs());
++it('local-only build keeps links and default connections on its own origin', () => {
++ vi.stubEnv('VITE_LOCAL_ONLY','1');
++ vi.stubEnv('VITE_DEFAULT_SERVER_URL','wss://server.apron.chat/');
++ const link=writeApronLink({server:'wss://chat.example/ws',room:'general'});
++ expect(new URL(link).origin).toBe(location.origin);
++ expect(readApronLink(link)?.room).toBe('general');
++ expect(defaultWebSocketUrl(new URL('https://chat.example') as unknown as Location)).toBe('wss://chat.example/ws');
++ expect(terminalPageUrl('https://chat.example/live/secret')).toBeUndefined();
++});
+diff --git a/src/lib/ui/terminal-page.ts b/src/lib/ui/terminal-page.ts
+index f0be913..1632d2a 100644
+--- a/src/lib/ui/terminal-page.ts
++++ b/src/lib/ui/terminal-page.ts
+@@ -13,7 +13,7 @@ export const TERMINAL_PAGE_ORIGIN = 'https://terminal.apron.chat';
+ 
+ /** `title` is the embed's, as sent: anything but a string is left out. */
+ export function terminalPageUrl(stream: string | undefined, title?: unknown): string | undefined {
+-	if (!stream) return undefined;
++	if (import.meta.env?.VITE_LOCAL_ONLY === '1' || !stream) return undefined;
+ 	let url: URL;
+ 	try {
+ 		url = new URL(stream);

@@ -1,0 +1,19 @@
+# Illustrative only. Reserved documentation addresses, no real deployment data.
+# Replace addresses/ranges/hostname and inject trusted TLS files at runtime.
+# Do not activate until independent review and explicit LAN approval.
+{
+	admin off
+	auto_https off
+	persist_config off
+	log default {
+		output discard
+	}
+}
+
+https://chat.example.test:443 {
+	bind 192.0.2.10 2001:db8::10
+	tls /run/credentials/apron-proxy/certificate.pem /run/credentials/apron-proxy/private-key.pem
+	@outside not remote_ip 192.0.2.0/24 2001:db8::/64
+	respond @outside 403
+	reverse_proxy 127.0.0.1:8080
+}

@@ -329,6 +329,20 @@ index ecd1df1..4227558 100644
  	if !u.account() {
  		return nil, &Error{Code: CodeDenied, Message: "Sign in with an account to use /invite-device"}
  	}
+diff --git a/apron/messages.go b/apron/messages.go
+index 36acbd1..d478de3 100644
+--- a/apron/messages.go
++++ b/apron/messages.go
+@@ -144,6 +144,9 @@ func (s *Server) saveMessage(c *client, req request) (any, bool, *Error) {
+ 	if destination == nil {
+ 		return nil, false, invalidParams("Unknown room %q", roomID)
+ 	}
++	if s.enrollment != nil && u.botOf != "" && destination.members[u.id] == nil {
++		return nil, false, &Error{Code: CodeDenied, Message: "A machine must join a room explicitly before posting"}
++	}
+ 	from := u.from()
+ 	var current *messageState
+ 	// editor is set for a save by a mentioned user of the text that the
 diff --git a/apron/persist.go b/apron/persist.go
 index 6838bc8..37d7f24 100644
 --- a/apron/persist.go

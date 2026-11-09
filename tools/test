@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+set -euo pipefail
+cd "$(dirname "$0")/.."
+: "${TMPDIR:?Set TMPDIR to a private scratch directory}"
+python_env="$TMPDIR/hermes-apron-python-$(sha256sum uv.lock | cut -c1-16)"
+UV_PROJECT_ENVIRONMENT="$python_env" uv sync --locked --group dev >&2
+hermes_source="$(python3 tools/prepare.py hermes)"
+test_runtime="$(mktemp -d "$TMPDIR/apron-test-run.XXXXXX")"
+trap 'rm -rf "$test_runtime"' EXIT
+tools/go build -o "$test_runtime/apron-home" ./cmd/apron-home
+export HERMES_APRON_BINARY="$test_runtime/apron-home"
+export PYTHONPATH="$hermes_source:$PWD"
+export HERMES_HOME="$test_runtime/profile"
+export PYTHONNOUSERSITE=1
+export PLAYWRIGHT_NODEJS_PATH
+PLAYWRIGHT_NODEJS_PATH="$(command -v node)"
+if [[ -z "${HERMES_APRON_FRONTEND_DIR:-}" ]]; then
+  frontend_source="$(python3 tools/prepare.py web)"
+  if [[ ! -f "$frontend_source/build/index.html" ]]; then
+    export HERMES_APRON_FRONTEND_DIR
+    HERMES_APRON_FRONTEND_DIR="$(tools/frontend)"
+  else
+    export HERMES_APRON_FRONTEND_DIR="$frontend_source/build"
+  fi
+fi
+if command -v nix >/dev/null && [[ -e /etc/NIXOS ]]; then
+  export LD_LIBRARY_PATH
+  LD_LIBRARY_PATH="$(nix eval --raw nixpkgs#stdenv.cc.cc.lib.outPath)/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+fi
+# Remove inherited deployment secrets before importing real Hermes modules.
+"$python_env/bin/python" tools/run_pytest.py "$@"

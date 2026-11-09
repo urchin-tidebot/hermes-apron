@@ -1,0 +1,18 @@
+name: hermes-apron
+label: Apron
+kind: platform
+version: 0.1.0
+license: MIT
+description: Invitation-only Apron v10 transport; runtime credentials and explicit actor policy.
+author: Hermes Apron contributors
+requires_env:
+  - name: APRON_TOKEN_FILE
+    description: Private runtime machine credential file (profile scoped)
+    password: false
+optional_env:
+  - name: APRON_HOME_ROOM
+    description: Explicit room for scheduled delivery
+    password: false
+  - name: APRON_ALLOWED_USERS
+    description: Immutable account IDs allowed to invoke Hermes
+    password: false

@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+set -euo pipefail
+cd "$(dirname "$0")/.."
+: "${TMPDIR:?Set a private scratch directory}"
+output_dir="${1:-$TMPDIR/hermes-apron-build}"
+mkdir -p "$output_dir"
+tools/go build -trimpath -buildvcs=false -o "$output_dir/apron-home" ./cmd/apron-home
+python3 tools/licenses.py "$output_dir"
+printf '%s\n' "$output_dir"

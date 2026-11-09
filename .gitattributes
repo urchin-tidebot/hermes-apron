@@ -1,0 +1,2 @@
+# Unified patches include context indentation and blank context markers.
+*.patch -whitespace

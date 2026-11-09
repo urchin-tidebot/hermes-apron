@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+set -euo pipefail
+cd "$(dirname "$0")/.."
+export GOWORK GOTOOLCHAIN=go1.27.3
+GOWORK="$(python3 tools/prepare.py server)"
+cd "$(dirname "$GOWORK")"
+git submodule update --init --depth 1 testdata/apron
+go test -race ./apron ./aproncmd ./store "$@"
