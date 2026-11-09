@@ -114,7 +114,7 @@ index 7167e84..5c27282 100644
  	}
  	if c.proposalBudget == nil {
 diff --git a/apron/bot.go b/apron/bot.go
-index e4f9589..5aaa352 100644
+index e4f9589..b331d84 100644
 --- a/apron/bot.go
 +++ b/apron/bot.go
 @@ -91,6 +91,9 @@ func (r *Registrar) Bot(userID string, options BotOptions) (*Bot, error) {
@@ -127,6 +127,76 @@ index e4f9589..5aaa352 100644
  	s.unlock()
  	b := &Bot{s: s, host: r.Host, userID: userID}
  	if _, err := b.conn(); err != nil {
+@@ -715,15 +718,26 @@ func (w *LiveWriter) MessageID() string {
+ // Write adds p to the text.
+ func (w *LiveWriter) Write(p []byte) (int, error) {
+ 	w.mu.Lock()
+-	err := w.startLocked()
+-	live, closed := w.live, w.closed
+-	w.mu.Unlock()
+-	switch {
+-	case err != nil:
+-		return 0, err
+-	case closed:
++	defer w.mu.Unlock()
++	if w.closed {
+ 		return 0, ErrLiveTextEnded
+-	case !live.write(p):
++	}
++	if err := w.startLocked(); err != nil {
++		return 0, err
++	}
++	// Keep admission and the buffer mutation in the same server critical
++	// section as revoke, scope changes and membership changes.
++	s := w.s
++	s.mu.Lock()
++	defer s.unlock()
++	if !s.machineWriteTargetAllowedLocked(w.e) {
++		w.err = ErrLiveTextEnded
++		if !w.e.removed {
++			s.failWriteLocked(w.e)
++		}
++		return 0, w.err
++	}
++	if !w.live.write(p) {
+ 		return 0, ErrLiveTextEnded
+ 	}
+ 	return len(p), nil
+@@ -734,7 +748,19 @@ func (w *LiveWriter) Write(p []byte) (int, error) {
+ func (w *LiveWriter) Close() error {
+ 	w.mu.Lock()
+ 	defer w.mu.Unlock()
+-	if w.e == nil || w.closed {
++	if w.closed {
++		return w.err
++	}
++	if w.e == nil {
++		// An unstarted native writer still owns a pending capability. Close
++		// must invalidate it if its machine lost authority before first Write.
++		s := w.s
++		s.mu.Lock()
++		defer s.unlock()
++		if e := s.writes[w.token]; e != nil && !s.machineWriteTargetAllowedLocked(e) {
++			s.failWriteLocked(e)
++			w.err = ErrLiveTextEnded
++		}
+ 		return w.err
+ 	}
+ 	w.closed = true
+@@ -742,6 +768,13 @@ func (w *LiveWriter) Close() error {
+ 	s.mu.Lock()
+ 	defer s.unlock()
+ 	w.e.writing = false
++	if !s.machineWriteTargetAllowedLocked(w.e) {
++		w.err = ErrLiveTextEnded
++		if !w.e.removed {
++			s.failWriteLocked(w.e)
++		}
++		return w.err
++	}
+ 	if !w.e.removed {
+ 		s.finishLiveLocked(w.e)
+ 	}
 diff --git a/apron/closed.go b/apron/closed.go
 new file mode 100644
 index 0000000..aa7464a
@@ -433,6 +503,197 @@ index 0000000..aa7464a
 +	}
 +	return false
 +}
+diff --git a/apron/closed_live_test.go b/apron/closed_live_test.go
+new file mode 100644
+index 0000000..2d2ba0b
+--- /dev/null
++++ b/apron/closed_live_test.go
+@@ -0,0 +1,185 @@
++package apron
++
++import (
++	"context"
++	"crypto/rand"
++	"fmt"
++	"io"
++	"net/http"
++	"strings"
++	"testing"
++	"time"
++
++	"github.com/go-webauthn/webauthn/webauthn"
++)
++
++// Use the public native streaming API and real enrollment mutations. Expiry
++// waits for the actual bound deadline; it never backdates policy records.
++func TestMachineNativeLiveAuthority(t *testing.T) {
++	for _, kind := range []string{kindAppend, kindTerminal} {
++		for _, change := range []string{"revoke", "expiry", "scope", "leave"} {
++			for _, boundary := range []string{"start", "unstarted-close", "write", "close", "internal", "timer"} {
++				t.Run(kind+"/"+change+"/"+boundary, func(t *testing.T) {
++					var policy *Enrollment
++					var bot *Bot
++					token := rand.Text() + rand.Text()
++					ttl := time.Hour
++					if change == "expiry" {
++						ttl = time.Second
++					}
++					cfg := extensionConfig(testExtension{"closed-live", func(r *Registrar) error {
++						var err error
++						policy, err = r.ClosedEnrollment()
++						if err != nil {
++							return err
++						}
++						bot, err = r.Bot("hermes", BotOptions{})
++						if err != nil {
++							return err
++						}
++						return policy.BindMachine("hermes", token, ttl, []string{"general"})
++					}})
++					cfg.PublicURL = "http://localhost"
++					cfg.WebAuthn, _ = webauthn.New(&webauthn.Config{RPID: "localhost", RPDisplayName: "Test", RPOrigins: []string{"http://localhost"}})
++					s, _ := newTestServer(t, cfg)
++					// Binding signs out the bootstrapping session asynchronously.
++					// Wait for its removal before Bot.conn opens a fresh session.
++					select {
++					case <-bot.session.Done():
++					case <-time.After(3 * time.Second):
++						t.Fatal("bootstrap session did not close")
++					}
++					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
++					defer cancel()
++					var w *LiveWriter
++					var err error
++					if kind == kindAppend {
++						w, err = bot.StreamAppend(ctx, "general", "opening")
++					} else {
++						w, err = bot.StreamTerminal(ctx, "general", "fixture")
++					}
++					if err != nil {
++						t.Fatal(err)
++					}
++					defer w.Close()
++					s.mu.RLock()
++					e := s.writes[w.token]
++					s.mu.RUnlock()
++					if e == nil {
++						t.Fatal("no pending stream")
++					}
++					if boundary != "start" && boundary != "unstarted-close" {
++						if _, err = io.WriteString(w, "BUFFERED-BEFORE-DENIAL"); err != nil {
++							t.Fatal(err)
++						}
++					}
++					switch change {
++					case "revoke":
++						err = policy.RevokeAccount("hermes")
++					case "expiry":
++						s.mu.RLock()
++						expires := policy.state.Machines[invitationHash(token)].Expires
++						s.mu.RUnlock()
++						time.Sleep(max(0, time.Until(expires)) + time.Millisecond)
++					case "scope":
++						// Operator-provisioned second room, then the public exact-scope API.
++						s.mu.Lock()
++						s.commitRoomLocked("other", nil, false, map[string]any{"title": "Other"})
++						s.unlock()
++						err = policy.BindMachine("hermes", token, ttl, []string{"other"})
++					case "leave":
++						_, err = bot.Call(ctx, "room_leave", map[string]any{"room_id": "general"})
++					}
++					if err != nil {
++						t.Fatal(err)
++					}
++					switch boundary {
++					case "unstarted-close":
++						if err = w.Close(); err == nil {
++							t.Error("unstarted Close ignored authority loss")
++						}
++					case "start", "write":
++						n, writeErr := io.WriteString(w, "AFTER-DENIAL")
++						if writeErr == nil || n != 0 {
++							t.Errorf("native Write accepted denied data: n=%d err=%v", n, writeErr)
++						}
++						if err = w.Close(); err == nil {
++							t.Error("Close reported success after write denial")
++						}
++					case "close":
++						if err = w.Close(); err == nil {
++							t.Error("native Close published after authority loss")
++						}
++					case "internal":
++						s.mu.Lock()
++						s.finishLiveLocked(e)
++						s.unlock()
++					case "timer":
++						s.mu.Lock()
++						// Exercise the real duration callback's idle-writer completion branch.
++						e.writing = false
++						e.timer.Reset(time.Millisecond)
++						s.unlock()
++						deadline := time.Now().Add(3 * time.Second)
++						for {
++							s.mu.RLock()
++							done := e.removed || e.finished
++							s.mu.RUnlock()
++							if done {
++								break
++							}
++							if time.Now().After(deadline) {
++								t.Fatal("duration callback did not finish")
++							}
++							time.Sleep(time.Millisecond)
++						}
++					}
++					s.mu.RLock()
++					defer s.mu.RUnlock()
++					if !e.removed || s.writes[w.token] != nil || s.embeds[e.id] != nil {
++						t.Error("denied stream capability remains valid")
++					}
++					if e.live != nil {
++						select {
++						case <-e.live.finished:
++						default:
++							t.Error("denied live reader not ended")
++						}
++						if strings.Contains(e.live.text(), "AFTER-DENIAL") {
++							t.Error("denied data reached live readers")
++						}
++					}
++					if m := s.messages[e.messageID]; m != nil {
++						body := m.snapshot()["body"].(map[string]any)
++						if strings.Contains(fmt.Sprint(body), "BUFFERED-BEFORE-DENIAL") || strings.Contains(fmt.Sprint(body), "AFTER-DENIAL") || len(asList(body["embeds"])) != 0 {
++							t.Error("denied stream published buffered/final data or retained a capability")
++						}
++					} else if boundary != "start" && boundary != "unstarted-close" {
++						t.Error("started message unexpectedly gone")
++					}
++				})
++			}
++		}
++	}
++}
++
++// Human bearer writers keep upstream semantics even after leaving the room.
++func TestHumanLiveAfterLeave(t *testing.T) {
++	for _, kind := range []string{kindAppend, kindTerminal} {
++		t.Run(kind, func(t *testing.T) {
++			s, h := newTestServer(t, DefaultConfig())
++			c := dialTestClient(t, h)
++			receipt, writeURL, _ := postLive(t, c, "human-live", map[string]any{"text": "opening", "embeds": []any{map[string]any{"kind": kind}}})
++			leaveRoom(t, c, "general")
++			if status, _, _ := httpDo(t, http.MethodPut, writeURL, strings.NewReader("human-output"), "text/plain"); status != http.StatusNoContent {
++				t.Fatalf("human writer refused: %d", status)
++			}
++			s.mu.RLock()
++			defer s.mu.RUnlock()
++			body := s.messages[receipt["message_id"].(string)].snapshot()["body"].(map[string]any)
++			if !strings.Contains(fmt.Sprint(body), "human-output") {
++				t.Fatal("human final output lost")
++			}
++		})
++	}
++}
 diff --git a/apron/closed_timers_test.go b/apron/closed_timers_test.go
 new file mode 100644
 index 0000000..f38f3e9
@@ -572,20 +833,21 @@ index e27f118..ef387a5 100644
 +	return r != nil && r.members[u.id] != nil
 +}
 diff --git a/apron/live.go b/apron/live.go
-index 2603695..59ed71a 100644
+index 2603695..2d644f7 100644
 --- a/apron/live.go
 +++ b/apron/live.go
-@@ -81,6 +81,9 @@ func (s *Server) startLiveLocked(e *embedState, opening string) {
+@@ -81,6 +81,10 @@ func (s *Server) startLiveLocked(e *embedState, opening string) {
  // posted with it, and a message's is republished with it. It returns the
  // refusal's status and message, if any.
  func (s *Server) startWriterLocked(e *embedState) (int, string) {
 +	if !s.machineWriteTargetAllowedLocked(e) {
++		s.failWriteLocked(e)
 +		return http.StatusGone, "The machine write target is no longer available"
 +	}
  	if e.started {
  		return http.StatusConflict, "This live text already has a writer"
  	}
-@@ -126,7 +129,7 @@ func (s *Server) postPendingLocked(e *embedState) bool {
+@@ -126,7 +130,7 @@ func (s *Server) postPendingLocked(e *embedState) bool {
  		return false
  	}
  	r := s.visibleRoomLocked(u, p.roomID)
@@ -594,7 +856,7 @@ index 2603695..59ed71a 100644
  		return false
  	}
  	embed := map[string]any{"embed_id": e.id, "kind": e.kind}
-@@ -224,11 +227,15 @@ func (s *Server) writeLive(w http.ResponseWriter, r *http.Request, e *embedState
+@@ -224,11 +228,15 @@ func (s *Server) writeLive(w http.ResponseWriter, r *http.Request, e *embedState
  		}
  	}()
  	bodyEnded := false
@@ -611,7 +873,7 @@ index 2603695..59ed71a 100644
  		case <-live.finished:
  			open = false
  		}
-@@ -245,6 +252,11 @@ func (s *Server) writeLive(w http.ResponseWriter, r *http.Request, e *embedState
+@@ -245,6 +253,11 @@ func (s *Server) writeLive(w http.ResponseWriter, r *http.Request, e *embedState
  	s.mu.Lock()
  	defer s.unlock()
  	e.writing = false
@@ -623,6 +885,19 @@ index 2603695..59ed71a 100644
  	if e.removed {
  		// A save without the embed ended the text: the writer's text was taken,
  		// up to the save, so it succeeded (§4.8.3).
+@@ -274,6 +287,12 @@ func (s *Server) finishLiveLocked(e *embedState) {
+ 	if e.finished || e.removed {
+ 		return
+ 	}
++	// This is the final content commit boundary for every writer and timer.
++	// Never turn buffered machine data into a final snapshot after authority loss.
++	if !s.machineWriteTargetAllowedLocked(e) {
++		s.failWriteLocked(e)
++		return
++	}
+ 	e.finished = true
+ 	e.live.end()
+ 	e.timer.Stop()
 diff --git a/apron/messages.go b/apron/messages.go
 index 36acbd1..d478de3 100644
 --- a/apron/messages.go

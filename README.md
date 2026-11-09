@@ -8,7 +8,12 @@ The real Hermes adapter supports native Markdown/replies, explicit rooms and thr
 
 ## Run the checks
 
-Use the provided private `TMPDIR`. No global packages or service configuration are changed.
+Use a short private `TMPDIR`; deep paths can exceed the operating system's Unix
+socket pathname limit during fixture startup. For example, after creating
+`$HOME/.hermes/cache/scratch` with mode 0700, run
+`env TMPDIR="$HOME/.hermes/cache/scratch" nix develop --command make check`.
+Use a command prefix rather than changing the persistent shell environment.
+No global packages or service configuration are changed.
 
 ```sh
 nix develop                 # optional pinned development shell

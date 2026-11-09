@@ -2,9 +2,12 @@
 
 **Working development implementation; not deployed, independently audited, released or production-ready.** The original acceptance contract is unchanged. “Automated” below describes executed evidence, not completion of every subcase. Manual and blocked items are not counted as passes. See the [execution ledger](validation-results.md) and [threat model](threat-model.md).
 
-Final pinned-Nix `make check` passes: 14 top-level Go server tests, 33 Python/browser
-tests, real patched upstream race suites, lint/build/notices and dependency/content
-audits. The execution ledger retains earlier failures and the full frontend results.
+Second-cycle fixes address the residual native machine Write/Close/final-commit bypass,
+strict Unicode peer validation/lifecycle cleanup, and long private socket-path diagnostics.
+Pinned-Nix validation passes 20 top-level wrapper Go tests and 160 Python/browser tests;
+full command results and limits are in the [execution ledger](validation-results.md).
+The first review and re-review found concrete defects; parent review of these local fixes
+is still outstanding. No independent-review pass or release approval is claimed.
 
 ## Security / architecture
 
@@ -13,7 +16,7 @@ audits. The execution ledger retains earlier failures and the full frontend resu
 | A1, S3–S5 | Implemented; automated | Real pinned apron/aproncmd wrapper; no guest/open/email/external signup; random short-lived one-account invite; real verified resident/UV WebAuthn; atomic account/credential/allowlist/invite SQLite batch. Concurrent, replay, restart and one transaction failure tested |
 | S5 durability | Partial release gate | FULL SQLite pragma verified; fail-stop persistence; no exhaustive process kill/power-loss injection at all filesystem/commit boundaries; independent patch review still required |
 | S1, S2 | App implemented; deployment manual | Loopback default/enforcement, exact HTTPS origin/RP, ephemeral-only explicit HTTP test mode. Proxy example uses documentation addresses. Actual TLS/LAN/non-LAN IPv4/IPv6/phone checks NOT RUN |
-| S6 | Implemented with documented capability limits | Durable invite/account/bot revocation, machine expiry disconnect, queued-frame denial and auth/resume denial; upstream sign-out forgets session/device/push state. Issued read capabilities remain separate bearers; machine room writes recheck scope/admission/membership |
+| S6 | Implemented with documented capability limits | Durable invite/account/bot revocation, machine expiry disconnect, queued-frame denial and auth/resume denial; upstream sign-out forgets session/device/push state. Issued read capabilities remain separate bearers; machine room writes, native Write/Close and central live completion recheck scope/admission/membership; denial invalidates embeds without publishing buffered final content |
 | S7 | Partial / BLOCKED | UV passkey login and bounded absolute origin-bound human resume; no ceremony on every reconnect. Device creation disabled. Upstream has no inspected supported credential-removal API; whole-account revocation recovery tested, backup/recovery drill not run. Human expiry gates new resumption; explicit revocation closes active human sockets. Machine expiry also closes active sockets |
 | A2, S8 | Implemented; automated | Actual pinned Hermes loader/context/registry/BasePlatformAdapter/profile helpers; separate non-admin bot runtime credential; persisted exact operator room scope in visibility/reads/writes/live metadata/media targets, including explicit thread ancestors and private memberships; independent actor allowlist; no trusted_inbound. Real cross-profile credential reservation and send-only coexistence tested |
 | A3, S9, V12 | Implemented locally; deployment manual | Paired pinned frontend served locally; local default WS/share/terminal policy, CSP, UV passkey/chat browser E2E; runtime-only credential files, private socket/state, no token-bearing HTTP client logs. Tests use disposable canaries. Phone trust and all production egress/network behavior untested |
@@ -24,13 +27,13 @@ audits. The execution ledger retains earlier failures and the full frontend resu
 | S12 | Implemented conservative subset | Content never becomes policy/configuration; no shell execution. Reviewed terminal-summary API requires explicit opt-in + approval, is bounded and scrubbed. No arbitrary tool/environment/transcript streaming; no general secret-redaction guarantee |
 | E1–E4 | Artifacts implemented; some checks pending | Docs, MIT, pins/lockfiles, build/test scripts, Nix devShell/source checks, read-only pinned Node-24 CI. Remote GitHub Actions NOT RUN. This is not a pure Nix-built Go binary derivation |
 | E5 | Automated representative evidence | Real pinned Go wire exchanges, actual Hermes APIs/handler/loader and Chromium virtual authenticator + actual Svelte client; no model calls. Full running model/tool gateway integration NOT RUN |
-| E6, E7 | BLOCKED / NOT RUN | Supplied independent findings remediated with RED/GREEN regressions. Parent fix review, complete independent security/license review and publication approval outstanding. No push, PR, fork, release, service activation or LAN deployment performed |
+| E6, E7 | BLOCKED / NOT RUN | Two focused correction cycles implement supplied findings with RED/GREEN regressions. Parent review of this second cycle, complete independent security/license review and publication approval outstanding. No push, PR, fork, release, service activation or LAN deployment performed |
 
 ## Native features and fallbacks
 
 | Feature | Implemented and exercised | Limitation / fallback |
 |---|---|---|
-| F1 | Greeting/version/capability inspection, token auth, out-of-order RPC correlation, errors/retry_after, cancellation/deadlines, heartbeat implementation, bounded reconnect/backoff, credential-change stop before reconnect authentication, strict consumed protocol shapes and locks/cleanup | Synthetic peers exercise unusual replies; real server exercises normal/error/reconnect paths. Long suspended-device heartbeat tests incomplete |
+| F1 | Greeting/version/capability inspection, token auth, out-of-order RPC correlation, errors/retry_after, cancellation/deadlines, heartbeat implementation, bounded reconnect/backoff, credential-change stop before reconnect authentication, strict consumed shapes, UTF-8 scalar validation of all decoded strings/keys, and locks/cleanup | Synthetic peers exercise unusual replies; real server exercises normal/error/reconnect paths. Long suspended-device heartbeat tests incomplete |
 | F2 | Markdown/plain, stable IDs, structured mentions, sender identity, replies, own/bot suppression | Display-name mentions grant no authority; only configured immutable IDs invoke Hermes |
 | F3 | Explicit joined rooms/private rooms/threads as independent native room IDs | Two private rooms/two child threads tested concurrently after explicit operator scope/restart; no machine-created rooms or inherited child scope |
 | F4 | Durable dispatch reservations/checkpoints, high-water history recovery, live buffering, edit/reaction/tombstone suppression | First install starts at current boundary; bounded backlog/gap fails closed. Reserve-before-dispatch can lose a turn on crash. No exactly-once tool effects/outbox guarantee |
@@ -59,7 +62,7 @@ audits. The execution ledger retains earlier failures and the full frontend resu
 | V13–V14 | Actor/room/mention gates, real authorized human handler, two private rooms/two threads and routing/readback; broader membership/private-media cases incomplete |
 | V15 | Negative command/clarification cancellation boundaries; affirmative approval/clarification BLOCKED |
 | V16 | No shell/config from content; hostile display-name authority rejected by ID design; exhaustive adversarial content corpus incomplete |
-| V17 | Real normal/error RPC and lifecycle; synthetic out-of-order/timeouts/cancel/denied and malformed consumed shapes, bounded shutdown/reconnect cleanup. Oversize/long heartbeat stress coverage incomplete |
+| V17 | Real normal/error RPC and lifecycle; synthetic out-of-order/timeouts/cancel/denied and malformed consumed shapes and Unicode, bounded shutdown/reconnect cleanup with fixed invalid_protocol status and restart. Oversize/long heartbeat stress coverage incomplete |
 | V18 | New adapter offline recovery, durable suppression, no new turns for changed records; full crash/retention/gap concurrency campaign incomplete |
 | V19–V20 | Separate sender/consumer lock and process coexistence; core-only/future-capability fallback. All revocation/offline/exhaustion permutations incomplete |
 | V21–V22 | Native append same-ID completion/revision, terminal summary opt-in/scrub; exhaustive cancellation/client rendering matrix incomplete |

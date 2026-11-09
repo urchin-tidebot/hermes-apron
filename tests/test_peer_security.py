@@ -44,7 +44,12 @@ async def peer_server(respond=None, capabilities=()):
                 result = {"message_id": "2"}
             if respond is not None:
                 result = respond(frame, result)
-            await ws.send(json.dumps({"id": frame["id"], "result": result}))
+            wire_result = (
+                {key: value for key, value in result.items() if key != "emit"}
+                if isinstance(result, dict)
+                else result
+            )
+            await ws.send(json.dumps({"id": frame["id"], "result": wire_result}))
             if isinstance(result, dict) and result.get("emit"):
                 await ws.send(json.dumps(result["emit"]))
 
@@ -549,3 +554,263 @@ async def test_standalone_malformed_peer_returns_error(tmp_path, stage):
             SimpleNamespace(extra=adapter_config(tmp_path, url)), "general", "fixture"
         )
         assert result.get("error") and not result.get("success")
+
+
+# These values travel as JSON escapes on a real WebSocket. Python's decoder
+# accepts them as str, but no such string has a strict UTF-8 representation.
+UNICODE_MESSAGE_FIELDS = [
+    ("room_id",),
+    ("message_id",),
+    ("from", "user_id"),
+    ("from", "name"),
+    ("from", "roles", 0),
+    ("body", "text"),
+    ("body", "mentions", 0),
+    ("reply_to", "message_id"),
+]
+
+
+def unicode_message(field, bad):
+    message = {
+        "room_id": "general",
+        "message_id": "2",
+        "log_id": "2",
+        "from": {"user_id": "human", "name": "Human", "roles": ["member"]},
+        "body": {"text": "authorized fixture", "mentions": ["hermes"]},
+        "reply_to": {"message_id": "1"},
+    }
+    target = message
+    for key in field[:-1]:
+        target = target[key]
+    target[field[-1]] = bad
+    return message
+
+
+@pytest.mark.parametrize("bad", ["\ud800", "\udfff"])
+@pytest.mark.parametrize("field", UNICODE_MESSAGE_FIELDS)
+@pytest.mark.parametrize("stage", ["live", "history"])
+async def test_json_surrogate_message_cleans_lifecycle(tmp_path, monkeypatch, bad, field, stage):
+    from hermes_apron import adapter as adapter_module
+    from hermes_apron.state import State
+
+    transports = []
+    original = adapter_module.Transport
+
+    def capture(*args, **kwargs):
+        t = original(*args, **kwargs)
+        transports.append(t)
+        return t
+
+    monkeypatch.setattr(adapter_module, "Transport", capture)
+    emitted = False
+    fixed = False
+    handled = []
+
+    def respond(frame, result):
+        nonlocal emitted
+        if frame["method"] == "room_list":
+            result = {
+                "joined": [
+                    {"room_id": "general", "latest_log_id": "2" if stage == "history" else "1"}
+                ]
+            }
+        if frame["method"] == "probe" and stage == "live" and not emitted:
+            emitted = True
+            result["emit"] = {"method": "message", "params": unicode_message(field, bad)}
+        if frame["method"] == "history" and stage == "history" and not fixed:
+            return {"history_log_id": "0", "messages": [unicode_message(field, bad)]}
+        return result
+
+    async with peer_server(respond, ["rooms", "history"]) as (url, authenticated):
+        extra = adapter_config(tmp_path, url)
+        extra["allowed_users"] = ["human"]
+        if stage == "history":
+            state = State(tmp_path / "consumer")
+            state.advance("general", "1")
+            state.close()
+        adapter = ApronAdapter(SimpleNamespace(extra=extra))
+
+        async def handle(event):
+            handled.append(event)
+
+        adapter.handle_message = handle
+        try:
+            connected = await adapter.connect()
+            if stage == "live":
+                assert connected
+                worker = adapter.worker
+                await adapter.transport.call("probe")
+                async with asyncio.timeout(3):
+                    await asyncio.shield(worker)
+                assert worker.exception() is None
+            else:
+                assert connected is False
+            assert not handled
+            assert adapter.fatal_error_code == "invalid_protocol"
+            assert len(authenticated) == 1
+            assert adapter.transport is None and adapter.state is None
+            assert adapter.credential_lease is None
+            assert all(not t.tasks and not t.pending and t.ws is None for t in transports)
+            fixed = True
+            assert await adapter.connect(), "malformed Unicode leaked a reservation"
+            assert adapter.fatal_error_code is None
+        finally:
+            await adapter.disconnect()
+
+
+@pytest.mark.parametrize(
+    "stage,field",
+    [
+        ("auth", ("you", "user_id")),
+        ("auth", ("you", "name")),
+        ("auth", ("you", "roles", 0)),
+        ("room_list", ("joined", 0, "room_id")),
+        ("room_list", ("joined", 0, "title")),
+        ("room_list", ("joined", 0, "parent_room_id")),
+        ("message", ("message_id",)),
+        ("message", ("embeds", 0, "write_url")),
+    ],
+)
+async def test_json_surrogate_startup_and_response_fields(tmp_path, stage, field):
+    fixed = False
+
+    def respond(frame, result):
+        if frame["method"] == "room_list":
+            result = {
+                "joined": [{"room_id": "general", "title": "Fixture", "parent_room_id": "root"}]
+            }
+        if frame["method"] == "message":
+            result = {"message_id": "2", "embeds": [{"write_url": "/write/fixture"}]}
+        if not fixed and frame["method"] == stage:
+            target = result
+            for key in field[:-1]:
+                target = target[key]
+            target[field[-1]] = "\ud800"
+        return result
+
+    async with peer_server(respond, ["rooms", "embed:append"]) as (url, _):
+        adapter = ApronAdapter(SimpleNamespace(extra=adapter_config(tmp_path, url)))
+        try:
+            if stage == "message":
+                assert await adapter.connect()
+                transport = adapter.transport
+                result = await adapter.send("general", "preview", metadata={"expect_edits": True})
+                assert result.success is False
+                worker = adapter.worker
+                async with asyncio.timeout(3):
+                    await asyncio.shield(worker)
+                assert worker.exception() is None
+                assert not transport.tasks and not transport.pending and transport.ws is None
+            else:
+                assert await adapter.connect() is False
+            assert adapter.fatal_error_code == "invalid_protocol"
+            assert adapter.transport is None and adapter.state is None
+            assert adapter.credential_lease is None
+            fixed = True
+            assert await adapter.connect()
+            assert adapter.fatal_error_code is None
+        finally:
+            await adapter.disconnect()
+
+
+@pytest.mark.parametrize(
+    "raw_value",
+    ['"\\ud800"', '{"\\ud800":"key"}', "[" * 20000 + "0" + "]" * 20000, "9" * 5000],
+    ids=["surrogate", "surrogate-key", "nesting", "integer-limit"],
+)
+async def test_peer_conversion_boundary_lifecycle(tmp_path, raw_value):
+    fixed = False
+
+    async def peer(ws):
+        await ws.send(json.dumps({"method": "server", "params": {"apron": 10, "auth": ["token"]}}))
+        auth = json.loads(await ws.recv())
+        value = json.dumps({"you": {"user_id": "hermes", "roles": ["bot"]}})
+        if not fixed:
+            value = '{"you":{"user_id":"hermes","roles":["bot"]},"extra":' + raw_value + "}"
+        await ws.send('{"id":' + json.dumps(auth["id"]) + ',"result":' + value + "}")
+        await ws.wait_closed()
+
+    async with websockets.serve(peer, "127.0.0.1", 0) as host:
+        url = f"http://127.0.0.1:{host.sockets[0].getsockname()[1]}"
+        adapter = ApronAdapter(SimpleNamespace(extra=adapter_config(tmp_path, url)))
+        try:
+            if raw_value.startswith("["):
+                # Python 3.14 accepts deeply nested JSON. The scalar walk must
+                # stay iterative, without creating a new conversion failure.
+                assert await adapter.connect()
+                assert not adapter.worker.done() and adapter.fatal_error_code is None
+                await adapter.disconnect()
+            else:
+                assert await adapter.connect() is False
+                assert adapter.fatal_error_code == "invalid_protocol"
+            assert adapter.transport is None and adapter.state is None
+            assert adapter.credential_lease is None
+            fixed = True
+            assert await adapter.connect()
+        finally:
+            await adapter.disconnect()
+
+
+async def test_valid_unicode_scalar_message_is_preserved(tmp_path):
+    text = "café 日本語 🌱"
+    handled = []
+
+    def respond(frame, result):
+        if frame["method"] == "probe":
+            return {
+                **result,
+                "emit": {"method": "message", "params": unicode_message(("body", "text"), text)},
+            }
+        return result
+
+    async with peer_server(respond, ["rooms"]) as (url, _):
+        extra = adapter_config(tmp_path, url)
+        extra["allowed_users"] = ["human"]
+        adapter = ApronAdapter(SimpleNamespace(extra=extra))
+
+        async def handle(event):
+            handled.append(event.text)
+
+        adapter.handle_message = handle
+        try:
+            assert await adapter.connect()
+            await adapter.transport.call("probe")
+            async with asyncio.timeout(3):
+                while not handled:
+                    await asyncio.sleep(0.01)
+            assert handled == [text]
+            assert not adapter.worker.done() and adapter.fatal_error_code is None
+        finally:
+            await adapter.disconnect()
+
+
+@pytest.mark.parametrize("field", ["auth", "capabilities"])
+async def test_json_surrogate_greeting_fields(tmp_path, field):
+    fixed = False
+
+    async def peer(ws):
+        greeting = {"apron": 10, "auth": ["token"], "capabilities": []}
+        if not fixed:
+            greeting[field] = ["\ud800"]
+        await ws.send(json.dumps({"method": "server", "params": greeting}))
+        if fixed:
+            auth = json.loads(await ws.recv())
+            await ws.send(
+                json.dumps(
+                    {"id": auth["id"], "result": {"you": {"user_id": "hermes", "roles": ["bot"]}}}
+                )
+            )
+        await ws.wait_closed()
+
+    async with websockets.serve(peer, "127.0.0.1", 0) as host:
+        url = f"http://127.0.0.1:{host.sockets[0].getsockname()[1]}"
+        adapter = ApronAdapter(SimpleNamespace(extra=adapter_config(tmp_path, url)))
+        try:
+            assert await adapter.connect() is False
+            assert adapter.fatal_error_code == "invalid_protocol"
+            assert adapter.transport is None and adapter.state is None
+            assert adapter.credential_lease is None
+            fixed = True
+            assert await adapter.connect()
+        finally:
+            await adapter.disconnect()

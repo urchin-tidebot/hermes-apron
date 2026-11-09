@@ -9,10 +9,16 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"syscall"
 	"time"
 )
 
 func (p *Closed) startControl(h *apron.Host) error {
+	// A pathname socket includes its terminating NUL in the OS limit. Count
+	// bytes, not runes, and report no private path or underlying syscall detail.
+	if len(p.ControlPath) >= len(syscall.RawSockaddrUnix{}.Path) {
+		return errors.New("operator socket path is too long; choose a shorter private state directory (tests: use a short private TMPDIR)")
+	}
 	if info, err := os.Lstat(p.ControlPath); err == nil {
 		if info.Mode()&os.ModeSocket == 0 {
 			return errors.New("control path is not a socket")

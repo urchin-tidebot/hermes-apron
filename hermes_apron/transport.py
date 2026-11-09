@@ -11,7 +11,7 @@ from urllib.parse import urlsplit
 import ipaddress
 import math
 
-from .protocol import ProtocolError, InvalidFrame, record, identifier, string_list
+from .protocol import ProtocolError, InvalidFrame, record, identifier, string_list, scalar_strings
 
 import websockets
 
@@ -108,7 +108,15 @@ class Transport:
         try:
             if not isinstance(raw, str) or len(raw.encode()) > 262144:
                 raise ValueError()
-            value = json.loads(raw, parse_constant=lambda _: (_ for _ in ()).throw(ValueError()))
+            try:
+                value = json.loads(
+                    raw, parse_constant=lambda _: (_ for _ in ()).throw(ValueError())
+                )
+            except RecursionError:
+                # A bounded byte frame can still exceed the JSON parser's nesting
+                # limit. Catch this conversion failure only at the decoder.
+                raise InvalidFrame("invalid Apron JSON nesting") from None
+            scalar_strings(value)
             if not isinstance(value, dict):
                 raise ValueError()
             if "id" in value and not isinstance(value["id"], str):

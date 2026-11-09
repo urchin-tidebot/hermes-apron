@@ -97,6 +97,12 @@ class ApronAdapter(BasePlatformAdapter):
             self.worker = asyncio.create_task(self._supervise())
             self._mark_connected()
             return True
+        except InvalidFrame:
+            self._set_fatal_error(
+                "invalid_protocol", "Apron sent invalid protocol data", retryable=False
+            )
+            await self.disconnect()
+            return False
         except ValueError, OSError, ProtocolError:
             await self.disconnect()
             return False

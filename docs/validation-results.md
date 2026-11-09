@@ -2,10 +2,58 @@
 
 Implementation evidence, not deployment approval. Network/device/operator gates remain NOT RUN.
 
-## Final remediation validation — 2026-11-09
+## Second and final focused correction cycle — 2026-11-09
 
-Authoritative totals for this worktree; counts in the numbered TDD chronology below are historical,
-not current aggregate counts. The requirements and release gates remain unchanged.
+Base: clean main checkout `a022df2`. Corrections are local; parent independent review is
+still required. **Neither independent review is recorded as passed.** The first review found
+machine scope, active-socket expiry, reconnect credential-lease and malformed-peer lifecycle
+issues; its corrections were integrated at the base. The second re-review found a remaining
+HIGH native LiveWriter bypass and MEDIUM malformed Unicode failure. The supplied re-review
+scratch result was `writeErr=nil`, `closeErr=nil`, with `AFTER-REVOKE` in final content;
+the native regressions below independently reproduce that behavior in this correction cycle.
+
+The parent also reported a full-check attempt with **95 Python passes and 18 fixture startup
+errors** from an overlong control Unix socket path. That run is a failure, not a passing suite.
+Its rerun with `env TMPDIR=/home/agent/.hermes/cache/scratch nix develop --command make check`
+passed **113 Python tests** and Go/upstream/lint/build/audits at the base. Those are parent-reported
+results, separate from this cycle's executed results. The new diagnostic rejects overlong state
+paths without printing the private path or changing socket permissions/location. Tests here use
+the same short private scratch root and command-scoped environment prefixes; no shared `/tmp`
+fallback or persistent global environment change is introduced.
+
+| Command (command-scoped short private TMPDIR, pinned `nix develop`) | Actual second-cycle result |
+|---|---|
+| `make check` | **PASS, exit 0**: wrapper and upstream races, full Python/browser suite, lint, binary build/notices, content and dependency audits |
+| `tools/go test -race ./...` (within `make check`) | **20 top-level wrapper Go tests PASS**; command package has no tests |
+| `tools/test -q` (within `make check`) | **160 passed**, 52.81s; real pinned Hermes, real Go wire/server and Chromium/WebAuthn/local frontend; no skips |
+| `tools/upstream-test` (within `make check`) | **PASS**: patched `apron` (52.278s), `aproncmd`, `store`, with race detection and real pinned protocol fixtures; includes 48 new machine-stream subcases and two human bearer subcases |
+| Focused Unicode/conversion/preservation suite | **47 passed / 80 deselected**; explicit clean restarts and fixed fatal status/cleanup assertions |
+| `tools/frontend --test` | **PASS, exit 0**: **200 files / 1,691 tests**, Svelte 0 errors / 0 warnings, runtime npm audit 0 vulnerabilities, local static build PASS. Five low development-only findings remain; frontend sources/pins unchanged |
+| `nix flake check --no-update-lock-file` | **PASS** on x86_64-linux; aarch64-linux omitted as incompatible, not counted as passed |
+| Go vet/gofmt and Ruff check/format | **PASS**; **24 Python source/test/tool files** formatted |
+| `tools/build` | **PASS**: binary, **28 runtime Go module** notices plus Go standard-library notice, all in scratch |
+| govulncheck v1.9.0 / Python OSV audit | **PASS**: no Go vulnerabilities; **40 locked public Python packages**, zero reported OSV findings |
+| `python3 tools/audit.py` | **PASS**: **72 source files / 16 prior added commits** at the precommit snapshot; requirements/validation contract unchanged |
+| `gitleaks dir/git --redact` | **PASS**: source, prior added history (`b899490..HEAD`; 15 non-merge commits scanned) and extracted package contents, no leaks |
+| Isolated `public_run.py uv --no-config build` | **PASS**: wheel and sdist built from a scratch source copy, no inherited private build variables; path/content audit **14 wheel files / 25 sdist files**, nine packaged modules match current sources |
+
+The separate uv `.gitignore` build helper was audited and excluded from archive counts after
+an initial archive-enumeration script attempted to open it as a tar file. That script failure
+is not a package-build pass/failure or a security finding. Runtime canary/permission/log tests
+are included in the full suite; raw execution logs and all generated artifacts stay in scratch.
+Final committed source/history are rescanned before handoff. The public v10 protocol was fetched
+again (web open was unavailable; isolated curl succeeded) and its SHA-256 remains
+`c5d74dd956e8dce9f6fe62eb7022a219e0c668be1bc1f536af39fc2e7f44f1d4`.
+
+No push, deployment, PR, service activation or production/gateway/Telegram/system configuration
+change was performed. Parent review, safe affirmative consent, selective credential removal,
+full license/security review, resource/crash/recovery coverage and actual LAN/TLS/device/IPv6
+acceptance remain explicit release gates. These tests do not clear any of those gates.
+
+## First correction cycle — historical validation through a022df2 (2026-11-09)
+
+These are the first cycle's recorded results, superseded by the second-cycle results above.
+Counts in the numbered TDD chronology are historical. The requirements and release gates remain unchanged.
 
 | Command (inside pinned `nix develop`, with private scratch `TMPDIR`) | Actual result |
 |---|---|
@@ -325,3 +373,42 @@ remain NOT RUN or BLOCKED.
     Final `tools/go test -race ./...` PASS with all 19 top-level wrapper tests.
     LOW stale-aggregate finding is corrected by the authoritative final-results table above;
     historical RED/GREEN counts remain explicitly historical.
+
+## Second-cycle behavioral RED/GREEN ledger
+
+38. Native machine stream authority: in dedicated scratch materialized from pinned server
+    `cefba0193cf5cf8407dfb47c0970b9a26e6c1b8c` plus the original patch,
+    `go test ./apron -run 'TestMachineNativeLiveAuthority|TestHumanLiveAfterLeave' -count=1`
+    RED: **all 40 machine subcases failed**; human append/terminal cases passed. Write accepted
+    `AFTER-DENIAL`; Close/internal/timer paths published buffered data after revoke, genuine
+    expiry, exact-scope narrowing or membership leave. First setup attempts raced asynchronous
+    bootstrap-session shutdown; only the corrected run, which waits for that session, counts
+    as RED. Supplemental unstarted-Close RED: **8 failed subcases**. GREEN:
+    `go test -race ./apron -run 'TestMachineNativeLiveAuthority|TestHumanLiveAfterLeave|TestExtensionStreamAppend' -count=1`
+    PASS: **48 machine authority-loss subcases**, both human bearer cases and existing native
+    append behavior. Timer tests reset the real duration timer and select its idle-writer branch;
+    expiry tests wait for the genuine bound deadline, never backdate stored policy. Native
+    Write/Close and the central final-content commit now recheck authority under the server lock;
+    denial fails/removes the embed and invalidates capabilities rather than publishing its buffer.
+    Patch regeneration verified every other original section byte-for-byte, including existing
+    machine timer tests and SQLite durability tests/hunks. Full checks rematerialize that patch.
+39. Strict Unicode peer data: real synthetic WebSocket JSON sends high/low unpaired surrogate
+    escapes in authorized live messages, history, immutable IDs, sender names/roles, mentions,
+    room metadata, auth and media responses. Focused RED run: **43 failed / 80 deselected**;
+    the authorized text case raised `UnicodeEncodeError` from `accepts`. One nesting case had
+    an incorrect rejection expectation: Python 3.14 accepts deep JSON, so it was changed to a
+    valid-input preservation test and is not counted as a defect. GREEN expanded focused suite:
+    **47 passed / 80 deselected**. Invalid Unicode now becomes `InvalidFrame` before consumption,
+    sets `fatal_error_code=invalid_protocol`, stops without worker exceptions or retries, releases
+    transport tasks/RPCs/socket and state/credential reservations, and permits explicit clean
+    restart. Startup failures report the same fixed fatal code. All decoded JSON strings and
+    keys are checked strictly; no replacement/normalization can change an identifier. Valid
+    non-ASCII/astral text is preserved. Conversion-boundary review covers oversized JSON integer
+    conversion and deeply nested responses: scalar traversal is iterative; a decoder
+    `RecursionError`, if raised, is converted only at `json.loads`, with no broad supervisor catch
+    added to conceal programming errors.
+40. Long private state paths: `tools/go test ./internal/server -run '^TestLongControlPathDiagnostic$' -count=1`
+    RED: ASCII and multibyte paths returned only `cannot bind operator socket`. GREEN: both
+    receive the fixed actionable shorter-private-state/TMPDIR diagnostic. The OS socket-path
+    capacity is checked in bytes before filesystem mutation. Access modes and socket location
+    remain unchanged.

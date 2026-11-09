@@ -9,6 +9,30 @@ class InvalidFrame(ProtocolError):
     """Malformed peer data is terminal until an explicit lifecycle restart."""
 
 
+def scalar_text(value):
+    if not isinstance(value, str):
+        raise InvalidFrame("invalid Apron text")
+    try:
+        value.encode("utf-8", errors="strict")
+    except UnicodeEncodeError:
+        raise InvalidFrame("invalid Apron Unicode text") from None
+    return value
+
+
+def scalar_strings(value):
+    """Check all JSON strings, including keys and unconsumed response fields."""
+    pending = [value]
+    while pending:
+        item = pending.pop()
+        if isinstance(item, str):
+            scalar_text(item)
+        elif isinstance(item, dict):
+            pending.extend(item.keys())
+            pending.extend(item.values())
+        elif isinstance(item, list):
+            pending.extend(item)
+
+
 def record(value):
     if not isinstance(value, dict):
         raise InvalidFrame("invalid Apron object")
@@ -22,6 +46,7 @@ def records(value):
 
 
 def identifier(value):
+    scalar_text(value)
     if (
         not isinstance(value, str)
         or not value
@@ -47,6 +72,8 @@ def position(value):
 def string_list(value):
     if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
         raise InvalidFrame("invalid Apron string list")
+    for item in value:
+        scalar_text(item)
     return value
 
 
@@ -54,8 +81,8 @@ def room_records(value, *, history=False):
     values = records(value)
     for room in values:
         identifier(room.get("room_id"))
-        if "title" in room and not isinstance(room["title"], str):
-            raise InvalidFrame("invalid Apron room title")
+        if "title" in room:
+            scalar_text(room["title"])
         if "parent_room_id" in room:
             identifier(room["parent_room_id"])
         if history or "latest_log_id" in room:
@@ -69,12 +96,11 @@ def message_record(value, *, history=False):
         identifier(message.get("room_id"))
     sender = record(message.get("from"))
     identifier(sender.get("user_id"))
-    if "name" in sender and not isinstance(sender["name"], str):
-        raise InvalidFrame("invalid Apron sender name")
+    if "name" in sender:
+        scalar_text(sender["name"])
     string_list(sender.get("roles", []))
     body = record(message.get("body", {}))
-    if not isinstance(body.get("text", ""), str):
-        raise InvalidFrame("invalid Apron message text")
+    scalar_text(body.get("text", ""))
     string_list(body.get("mentions", []))
     if "reply_to" in message:
         identifier(record(message["reply_to"]).get("message_id"))
@@ -97,4 +123,5 @@ def delivery_receipt(value, *, writer=False):
             or not embeds[0]["write_url"]
         ):
             raise InvalidFrame("invalid Apron writer receipt")
+        scalar_text(embeds[0]["write_url"])
     return result

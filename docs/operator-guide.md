@@ -4,6 +4,14 @@ Do not run this against the installed gateway, production credentials or LAN whi
 
 ## Build and loopback exercise
 
+Keep the private state directory path short: the operator control socket path must
+fit the OS pathname socket limit (107 UTF-8 bytes on Linux, including the state
+directory and socket filename). A too-long path fails with a fixed diagnostic;
+no public socket or shared-directory fallback is used. Test builds should use a
+short mode-0700 scratch directory, for example
+`env TMPDIR="$HOME/.hermes/cache/scratch" nix develop --command make check`,
+without exporting a persistent global environment variable.
+
 Use the provided private TMPDIR and `tools/go build -trimpath -o "$TMPDIR/apron-home" ./cmd/apron-home`. Build the pinned local-only frontend with `tools/frontend`; its last stdout line is the built directory in scratch. `tools/test -q` exercises disposable accounts, operator CLI, real Hermes and Chromium without starting a model.
 
 For an explicit temporary manual experiment, run `serve` with `--state-dir <private-disposable-directory> --listen 127.0.0.1:0 --test-loopback --frontend-dir <built-frontend>`. The printed URL is ephemeral localhost. Interrupt that process when finished; delete its disposable state. Test mode rejects non-loopback, a fixed port, or a production public URL. It must not be used as a LAN exception.
