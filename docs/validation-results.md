@@ -412,3 +412,32 @@ remain NOT RUN or BLOCKED.
     receive the fixed actionable shorter-private-state/TMPDIR diagnostic. The OS socket-path
     capacity is checked in bytes before filesystem mutation. Access modes and socket location
     remain unchanged.
+
+## Parent verification and final focused independent reviews
+
+At implementation commit `601b723760ff6392bdaa0f57eb3be2a9edccb54a`:
+
+- Parent `env TMPDIR=<short-private-scratch> nix develop --command make check`: PASS,
+  exit 0. Wrapper Go race suite, 160 Python/browser tests (55.61s), patched upstream
+  apron/aproncmd/store race suites, Go vet/gofmt, Ruff lint/format, build/notices,
+  source/history content audit, govulncheck and Python OSV audit all passed.
+- Parent added-history gitleaks scan (`b899490..HEAD`): PASS, 16 commits, no leaks.
+- Independent Go review of `a022df2..601b723`: PASS, no security/logic findings.
+  Inspected native Write/Close/start/final-commit locking and denial behavior, and ran
+  native authority-loss, human/unrestricted-bot, append/terminal/timer regressions and
+  `TestLongControlPathDiagnostic` under the race detector.
+- Independent Python review of the same range: PASS, no security/logic findings.
+  Executed 47 Unicode/conversion/lifecycle cases (20.11s) and 29 malformed-peer/recovery
+  cleanup cases (8.38s). Valid astral text remains unchanged; invalid frames cleanly
+  release reservations and permit explicit restart.
+- Earlier parent check with a deeply nested private TMPDIR failed fixture startup:
+  95 Python tests passed and 18 errored. A short-path rerun passed 113 tests before
+  the second correction cycle; the current 160-test parent result above supersedes it.
+  No failure was counted as a pass. The diagnostic now explains the socket-path limit.
+
+These are focused independent reviews and reproducible parent checks, not a complete
+security/license audit or deployment approval. Development source is approved for public
+publication with known blockers retained. Safe affirmative consent, selective credential
+removal, broader native features, resource/crash testing and real LAN/TLS/device/recovery
+drills remain blocked or unverified as listed in the status matrix. No live services or
+production configuration were modified.

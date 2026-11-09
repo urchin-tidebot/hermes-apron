@@ -35,7 +35,7 @@ nix flake check             # offline source checks once Nix dependencies are av
 - [Patch rationale](patches/README.md)
 - Original [requirements](REQUIREMENTS.md) and [acceptance scenarios](VALIDATION.md)
 
-The application listens only on explicit loopback addresses. Its HTTP test exception requires an ephemeral loopback port and excludes a production public URL. LAN HTTPS, phone/browser trust, IPv4/IPv6 ingress, backup/recovery drills, independent review and publication are separate gates. Nothing here activates a proxy, firewall, gateway, Telegram integration or LAN service.
+The application listens only on explicit loopback addresses. Its HTTP test exception requires an ephemeral loopback port and excludes a production public URL. LAN HTTPS, phone/browser trust, IPv4/IPv6 ingress, backup/recovery drills and a complete independent audit are separate deployment gates. Focused independent review of the corrected security findings passed; this does not establish production readiness. Nothing here activates a proxy, firewall, gateway, Telegram integration or LAN service.
 
 ## Plugin installation
 
@@ -43,4 +43,4 @@ Install this package into the chosen Hermes environment with `uv pip install --p
 
 ## License
 
-[MIT](LICENSE). Upstream code, libraries, browser assets and fonts retain their licenses; see [provenance](docs/provenance.md). Source and release artifacts still need parent review before publication.
+[MIT](LICENSE). Upstream code, libraries, browser assets and fonts retain their licenses; see [provenance](docs/provenance.md). Development source has passed parent publication checks; release artifacts and deployment still require separate review.

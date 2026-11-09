@@ -1,7 +1,10 @@
 # Isolated upstream patch
 
 `closed-enrollment.patch` applies only to server commit
-`cefba0193cf5cf8407dfb47c0970b9a26e6c1b8c` (MIT). No server tree is vendored or fork published.
+`cefba0193cf5cf8407dfb47c0970b9a26e6c1b8c` (MIT). No server tree is vendored.
+The project-specific closed-enrollment patch is not submitted upstream. The small API-only
+[`aproncmd.ServerConfig` PR #37](https://github.com/apron-chat/apron-server-go/pull/37)
+is submitted separately through a fork and does not change upstream authentication/persistence.
 `tools/go` materializes it in TMPDIR and uses a Go workspace; ordinary `go test` without that
 workspace intentionally cannot compile consumers of the added API.
 

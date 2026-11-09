@@ -6,8 +6,10 @@ Second-cycle fixes address the residual native machine Write/Close/final-commit 
 strict Unicode peer validation/lifecycle cleanup, and long private socket-path diagnostics.
 Pinned-Nix validation passes 20 top-level wrapper Go tests and 160 Python/browser tests;
 full command results and limits are in the [execution ledger](validation-results.md).
-The first review and re-review found concrete defects; parent review of these local fixes
-is still outstanding. No independent-review pass or release approval is claimed.
+The first review and re-review found concrete defects. Final focused independent Go and
+Python reviews of `601b723` passed with no security/logic findings in those reviewed fixes.
+The parent reran `make check` and the added-history secret scan successfully. This is not
+a complete independent audit or release/deployment approval; see the ledger for scope.
 
 ## Security / architecture
 
@@ -27,7 +29,7 @@ is still outstanding. No independent-review pass or release approval is claimed.
 | S12 | Implemented conservative subset | Content never becomes policy/configuration; no shell execution. Reviewed terminal-summary API requires explicit opt-in + approval, is bounded and scrubbed. No arbitrary tool/environment/transcript streaming; no general secret-redaction guarantee |
 | E1–E4 | Artifacts implemented; some checks pending | Docs, MIT, pins/lockfiles, build/test scripts, Nix devShell/source checks, read-only pinned Node-24 CI. Remote GitHub Actions NOT RUN. This is not a pure Nix-built Go binary derivation |
 | E5 | Automated representative evidence | Real pinned Go wire exchanges, actual Hermes APIs/handler/loader and Chromium virtual authenticator + actual Svelte client; no model calls. Full running model/tool gateway integration NOT RUN |
-| E6, E7 | BLOCKED / NOT RUN | Two focused correction cycles implement supplied findings with RED/GREEN regressions. Parent review of this second cycle, complete independent security/license review and publication approval outstanding. No push, PR, fork, release, service activation or LAN deployment performed |
+| E6, E7 | Focused review passed; deployment BLOCKED | Two correction cycles and final focused independent Go/Python review passed at `601b723`; parent full checks and source/history secret scans passed. Development source approved for publication, not a release. Complete independent security/license audit and all operational gates remain outstanding. Upstream API-only PR #37 is separate; no service activation or LAN deployment |
 
 ## Native features and fallbacks
 
