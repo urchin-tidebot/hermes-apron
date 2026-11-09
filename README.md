@@ -6,6 +6,16 @@ Closed passkey enrollment uses the real pinned Go server and WebAuthn library, a
 
 The real Hermes adapter supports native Markdown/replies, explicit rooms and threads as rooms, persistent RPC/heartbeat/reconnect, durable recovery and dispatch deduplication, append streams, bounded artifact uploads, typing, and standalone scheduled delivery. A separate runtime credential identifies a non-admin bot. Reviewed terminal summaries are opt-in; arbitrary tool output is never hooked automatically. Interactive approvals and clarifications remain blocked; see the matrix before using this for work.
 
+## Python-native experiment
+
+The `experiment/python-native` branch explores an original Python Apron server
+library hosted directly by Hermes, with no Go runtime dependency. Its new
+[requirements](docs/python-native/REQUIREMENTS.md) and
+[validation contract](docs/python-native/VALIDATION.md) supersede the Go-specific
+architecture for that experiment, not the existing security requirements.
+The tested Go implementation is preserved at `reference/go-server-validated`.
+No Python-server implementation or validation is claimed merely by this specification.
+
 ## Run the checks
 
 Use a short private `TMPDIR`; deep paths can exceed the operating system's Unix
