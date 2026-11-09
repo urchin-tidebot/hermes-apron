@@ -53,6 +53,10 @@ func TestMachineRoomScope(t *testing.T) {
 			denied(t, bot.call(t, "message", map[string]any{"room_id": room, "body": map[string]any{"text": "outside post", "embeds": []any{map[string]any{"kind": "upload", "name": "x", "size": 1}}}}))
 			denied(t, bot.call(t, "message", map[string]any{"room_id": "general", "reply_to": map[string]any{"message_id": posted["message_id"]}, "body": map[string]any{"text": "outside reply"}}))
 			denied(t, bot.call(t, "room_join", map[string]any{"room_id": room, "user_id": "hermes"}))
+			denied(t, bot.call(t, "command", map[string]any{"room_id": room, "body": map[string]any{"text": "/embed-append outside"}}))
+			denied(t, bot.call(t, "message", map[string]any{"message_id": posted["message_id"], "body": map[string]any{"text": "outside edit"}}))
+			embedID := posted["embeds"].([]any)[0].(map[string]any)["embed_id"]
+			denied(t, bot.call(t, "message", map[string]any{"room_id": "general", "body": map[string]any{"embeds": []any{map[string]any{"embed_id": embedID}}}}))
 		})
 	}
 	for _, params := range []map[string]any{{"title": "Extra"}, {"title": "Extra private", "private": true}, {"parent_room_id": "general", "title": "Extra thread"}} {
@@ -68,6 +72,10 @@ func TestMachineRoomScope(t *testing.T) {
 				}
 			}
 		}
+	}
+	children := result(t, bot.call(t, "room_list", map[string]any{"parent_room_id": "general", "filter": "not_joined"}))
+	if listed, _ := children["not_joined"].([]any); len(listed) != 0 {
+		t.Fatal("parent listing disclosed an unconfigured thread")
 	}
 	result(t, bot.call(t, "message", map[string]any{"room_id": "general", "body": map[string]any{"text": "configured works"}}))
 	// A human membership grant cannot expand operator scope, even for a private room.
@@ -88,13 +96,21 @@ func TestMachineRoomScope(t *testing.T) {
 	bot.c.CloseNow()
 	h.Close()
 	s.Shutdown(context.Background())
-	// The persisted exact scope remains valid on a second start with the same credential.
-	_, h = open(&enrolling{machine: e.machine, rooms: e.rooms})
+	// Restore policy without rebinding: visibility must come from persisted exact scope.
+	restored := &enrolling{}
+	_, h = open(restored)
 	bot = dial(t, h.URL)
 	result(t, bot.call(t, "auth", map[string]any{"scheme": "token", "token": e.machine}))
 	result(t, bot.call(t, "history", map[string]any{"room_id": private}))
 	denied(t, bot.call(t, "room_join", map[string]any{"room_id": public}))
-
+	if err = restored.policy.BindMachine("hermes", e.machine, time.Hour, []string{private}); err != nil {
+		t.Fatal(err)
+	}
+	bot = dial(t, h.URL)
+	result(t, bot.call(t, "auth", map[string]any{"scheme": "token", "token": e.machine}))
+	denied(t, bot.call(t, "message", map[string]any{"body": map[string]any{"text": "implicit general denied"}}))
+	denied(t, bot.call(t, "history", map[string]any{"room_id": "general"}))
+	result(t, bot.call(t, "history", map[string]any{"room_id": private}))
 }
 
 // Thread metadata is broadcast to parent members upstream, even if they have

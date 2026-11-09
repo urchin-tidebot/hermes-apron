@@ -2,6 +2,38 @@
 
 Implementation evidence, not deployment approval. Network/device/operator gates remain NOT RUN.
 
+## Final remediation validation — 2026-11-09
+
+Authoritative totals for this worktree; counts in the numbered TDD chronology below are historical,
+not current aggregate counts. The requirements and release gates remain unchanged.
+
+| Command (inside pinned `nix develop`, with private scratch `TMPDIR`) | Actual result |
+|---|---|
+| `make check` | PASS after the documented human-delta regression was corrected. Includes wrapper/upstream races, full Python/browser suite, lint, binary build, content audit and dependency audits |
+| `tools/go test -race ./...` | PASS: **19 top-level wrapper Go tests**; command package has no test files. Final rerun includes restored-policy-without-rebind, implicit default target and known message/embed-ID assertions |
+| `tools/test -q` | PASS: **113 Python tests**, including actual pinned Hermes, real Go server, Chromium virtual WebAuthn and pinned frontend browser E2E; no skips reported |
+| `tools/upstream-test` | PASS under race detection: real patched `apron`, `aproncmd`, `store`, with pinned protocol fixtures initialized |
+| `tools/frontend --test` | PASS: **200 files / 1,691 tests**; Svelte 0 errors / 0 warnings; runtime npm audit 0 vulnerabilities; local static build PASS. Five low development-only findings remain |
+| `nix flake check --no-update-lock-file` | PASS on x86_64-linux; aarch64-linux omitted as incompatible, not counted as a pass |
+| `tools/go vet ./...`, gofmt, Ruff check/format | PASS; **24 Python source/test/tool files** formatted |
+| `tools/build` | PASS, binary plus notices for **28 runtime Go modules** and Go standard library in scratch |
+| `tools/go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...` | PASS: no vulnerabilities found with pinned Go 1.27.3 |
+| `python3 tools/dependency_audit.py` | PASS: **40 locked public Python registry packages**, zero OSV findings |
+| `python3 tools/audit.py` and `gitleaks dir/git --redact` (`b899490..HEAD`) | PASS on source/added history; code snapshot `d47a451`: **71 source files / 13 added commits**. Final test/docs working tree and committed history rescanned before handoff; raw logs stay in scratch |
+| `python3 tools/public_run.py uv --no-config build --out-dir <scratch>` | PASS: wheel and sdist. Archive name/content audit PASS: **14 wheel files / 25 sdist files**. uv's separate `.gitignore` helper was inspected and excluded from archive counts |
+
+The final code-validation snapshot is `d47a451`; subsequent changes strengthen wire assertions and
+update evidence/status only. Frontend/build/dependency pins did not change. The public v10 protocol
+was fetched again and its SHA-256 still matches the provenance entry. Test state, generated
+credentials, locks, browser authenticators, logs and artifacts stayed in disposable scratch.
+No production secrets/configuration were read. No deployment, gateway/Telegram/firewall/root/
+Home Manager changes, push, PR, fork, history rewrite or protected instruction edits occurred.
+
+Parent fix review and publication approval, safe affirmative consent, supported credential removal,
+full license/security review, resource/crash/recovery coverage, and real LAN/TLS/device/IPv6 acceptance
+remain release blockers. Green tests do not clear them. Already-issued read capability URLs and
+previously shared bytes remain bearer/copy risks; machine room write targets are now rechecked.
+
 ## TDD ledger
 
 1. Closed admission: `go test ./internal/server -run TestFreshServerClosed -v`
@@ -244,3 +276,9 @@ These are Python package artifacts, not a complete audited deployment release.
     Real HTTP `TestMachineUploadRechecksTargetMembership` covers leave before write start and
     during body receive (genuine HTTP 100-continue rendezvous), with no read capability published.
     `tools/go test -race ./internal/server -run '^TestMachine(MustBeJoinedToPost|UploadRechecksTargetMembership|RoomScope)' -count=1`: PASS.
+37. Supplemental scope wire assertions verify policy restoration without any machine rebinding,
+    parent-filtered child listings, known outside message/embed IDs, out-of-scope stream commands,
+    and implicit default targets after removing `general` from explicit scope.
+    Final `tools/go test -race ./...` PASS with all 19 top-level wrapper tests.
+    LOW stale-aggregate finding is corrected by the authoritative final-results table above;
+    historical RED/GREEN counts remain explicitly historical.
