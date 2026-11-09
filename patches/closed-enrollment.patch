@@ -13,7 +13,7 @@ index 274b0be..0e593ca 100644
  	case s.allowlist == nil, u.botOf != "":
  		return true
 diff --git a/apron/auth.go b/apron/auth.go
-index 7167e84..a9e6018 100644
+index 7167e84..5c27282 100644
 --- a/apron/auth.go
 +++ b/apron/auth.go
 @@ -169,7 +169,7 @@ func (s *Server) restoreSchemesLocked() error {
@@ -21,7 +21,7 @@ index 7167e84..a9e6018 100644
  func (s *Server) authenticate(c *client, req request) (any, *Error) {
  	s.mu.Lock()
 -	if c.closing.Load() {
-+	if c.closing.Load() || s.storeFailed {
++	if c.closing.Load() || s.storeFailed || s.machineExpiredLocked(c) {
  		s.unlock()
  		return nil, connectionClosing()
  	}
@@ -71,7 +71,7 @@ index 7167e84..a9e6018 100644
  	s.mu.Lock()
  	defer s.unlock()
 -	if c.closing.Load() {
-+	if c.closing.Load() || s.storeFailed {
++	if c.closing.Load() || s.storeFailed || s.machineExpiredLocked(c) {
  		return nil, connectionClosing()
  	}
  	switch result := result.(type) {
@@ -109,7 +109,7 @@ index 7167e84..a9e6018 100644
  func (sc *schemeConn) proposeLocked(state, returnURL string) (*proposal, *authn.Error) {
  	s, c := sc.s, sc.c
 -	if c.closing.Load() {
-+	if c.closing.Load() || s.storeFailed {
++	if c.closing.Load() || s.storeFailed || s.machineExpiredLocked(c) {
  		return nil, authn.Denied("This connection is closing")
  	}
  	if c.proposalBudget == nil {
@@ -129,10 +129,10 @@ index e4f9589..5aaa352 100644
  	if _, err := b.conn(); err != nil {
 diff --git a/apron/closed.go b/apron/closed.go
 new file mode 100644
-index 0000000..108e34f
+index 0000000..aa7464a
 --- /dev/null
 +++ b/apron/closed.go
-@@ -0,0 +1,251 @@
+@@ -0,0 +1,300 @@
 +package apron
 +
 +import (
@@ -151,9 +151,10 @@ index 0000000..108e34f
 +// immutable-ID allowlist and stores policy alongside upstream accounts, in the
 +// SAME store batch. No policy callbacks execute inside the authentication lock.
 +type Enrollment struct {
-+	host  *Host
-+	list  *Allowlist
-+	state enrollmentState
++	host          *Host
++	list          *Allowlist
++	state         enrollmentState
++	machineTimers map[string]*time.Timer
 +}
 +type enrollmentState struct {
 +	Invitations map[string]enrollmentInvite  `json:"invitations"`
@@ -173,7 +174,7 @@ index 0000000..108e34f
 +}
 +
 +func (r *Registrar) ClosedEnrollment() (*Enrollment, error) {
-+	e := &Enrollment{host: r.Host, list: r.RestrictSignIn()}
++	e := &Enrollment{host: r.Host, list: r.RestrictSignIn(), machineTimers: make(map[string]*time.Timer)}
 +	_, err := r.Store().Get("policy", &e.state)
 +	if err != nil {
 +		return nil, errors.New("closed enrollment policy is corrupt")
@@ -192,12 +193,17 @@ index 0000000..108e34f
 +	if e.state.Machines == nil {
 +		e.state.Machines = make(map[string]machineCredential)
 +	}
++	r.s.mu.Lock()
 +	for _, u := range r.s.users {
 +		if u.botOf != "" {
 +			u.machinePolicy = e
 +		}
 +	}
 +	r.s.enrollment = e
++	for hash, m := range e.state.Machines {
++		e.scheduleMachineLocked(hash, m)
++	}
++	r.s.unlock()
 +	return e, nil
 +}
 +func invitationHash(token string) string {
@@ -288,6 +294,7 @@ index 0000000..108e34f
 +	s := e.host.s
 +	s.mu.Lock()
 +	defer s.unlock()
++	e.stopMachineTimerLocked(id)
 +	delete(e.state.Accounts, id)
 +	for hash, m := range e.state.Machines {
 +		if m.UserID == id {
@@ -341,9 +348,11 @@ index 0000000..108e34f
 +			delete(e.state.Machines, key)
 +		}
 +	}
++	e.stopMachineTimerLocked(id)
 +	s.signOutLocked(u)
 +	e.state.Machines[hash] = m
 +	u.machinePolicy = e
++	e.scheduleMachineLocked(hash, m)
 +	// Reconcile under the policy lock, including private rooms. Only this trusted
 +	// operator API may grant scope; protocol membership changes cannot expand it.
 +	for _, r := range u.joined {
@@ -383,6 +392,106 @@ index 0000000..108e34f
 +		}
 +	}
 +	return false
++}
++
++// Every callback takes the policy lock and verifies its timer generation. Stopped
++// callbacks cannot sign out a newly bound credential. No timers survive shutdown.
++func (e *Enrollment) stopMachineTimerLocked(id string) {
++	if timer := e.machineTimers[id]; timer != nil {
++		timer.Stop()
++		delete(e.machineTimers, id)
++	}
++}
++func (e *Enrollment) scheduleMachineLocked(hash string, m machineCredential) {
++	e.stopMachineTimerLocked(m.UserID)
++	if m.Revoked || e.host.s.closed {
++		return
++	}
++	var timer *time.Timer
++	timer = time.AfterFunc(max(0, time.Until(m.Expires)), func() {
++		s := e.host.s
++		s.mu.Lock()
++		defer s.unlock()
++		if s.closed || e.machineTimers[m.UserID] != timer {
++			return
++		}
++		delete(e.machineTimers, m.UserID)
++		if current, ok := e.state.Machines[hash]; ok && !time.Now().Before(current.Expires) {
++			if u := s.users[m.UserID]; u != nil {
++				s.signOutLocked(u)
++			}
++		}
++	})
++	e.machineTimers[m.UserID] = timer
++}
++
++// Check the clock at dispatch too: queued frames cannot race a delayed timer.
++func (s *Server) machineExpiredLocked(c *client) bool {
++	if c.user != nil && c.user.machinePolicy != nil && !c.user.machinePolicy.machineAllowedLocked(c.user.id) {
++		s.signOutLocked(c.user)
++		return true
++	}
++	return false
++}
+diff --git a/apron/closed_timers_test.go b/apron/closed_timers_test.go
+new file mode 100644
+index 0000000..f38f3e9
+--- /dev/null
++++ b/apron/closed_timers_test.go
+@@ -0,0 +1,54 @@
++package apron
++
++import (
++	"context"
++	"crypto/rand"
++	"github.com/go-webauthn/webauthn/webauthn"
++	"testing"
++	"time"
++)
++
++func TestMachineTimerLifecycle(t *testing.T) {
++	var e *Enrollment
++	cfg := extensionConfig(testExtension{"closed", func(r *Registrar) error {
++		var err error
++		e, err = r.ClosedEnrollment()
++		if err != nil {
++			return err
++		}
++		if _, err = r.Bot("hermes", BotOptions{}); err != nil {
++			return err
++		}
++		return e.BindMachine("hermes", rand.Text()+rand.Text(), time.Hour, []string{"general"})
++	}})
++	cfg.WebAuthn, _ = webauthn.New(&webauthn.Config{RPID: "localhost", RPDisplayName: "Test", RPOrigins: []string{"http://localhost"}})
++	s, _ := newTestServer(t, cfg)
++	timer := func() *time.Timer { s.mu.RLock(); defer s.mu.RUnlock(); return e.machineTimers["hermes"] }
++	old := timer()
++	if old == nil {
++		t.Fatal("binding has no expiry timer")
++	}
++	if err := e.BindMachine("hermes", rand.Text()+rand.Text(), time.Hour, []string{"general"}); err != nil {
++		t.Fatal(err)
++	}
++	if timer() == old || old.Stop() {
++		t.Fatal("rotation retained its old timer")
++	}
++	current := timer()
++	if err := e.RevokeAccount("hermes"); err != nil {
++		t.Fatal(err)
++	}
++	if timer() != nil || current.Stop() {
++		t.Fatal("revocation retained its timer")
++	}
++	if err := e.BindMachine("hermes", rand.Text()+rand.Text(), time.Hour, []string{"general"}); err != nil {
++		t.Fatal(err)
++	}
++	current = timer()
++	if err := s.Shutdown(context.Background()); err != nil {
++		t.Fatal(err)
++	}
++	if timer() != nil || current.Stop() {
++		t.Fatal("shutdown retained its timer")
++	}
 +}
 diff --git a/apron/devices.go b/apron/devices.go
 index ecd1df1..4227558 100644
@@ -487,7 +596,7 @@ index d62b648..c9f9fdb 100644
  		if err := admitActionLocked(u); err != nil {
  			return nil, false, err
 diff --git a/apron/server.go b/apron/server.go
-index 9a507d0..6c320c7 100644
+index 9a507d0..e92f05e 100644
 --- a/apron/server.go
 +++ b/apron/server.go
 @@ -439,8 +439,9 @@ func (t wsTransport) ping(ctx context.Context) error { return t.ws.Ping(ctx) }
@@ -536,7 +645,19 @@ index 9a507d0..6c320c7 100644
  	s.handler.ServeHTTP(w, r)
  }
  
-@@ -1092,6 +1106,9 @@ func (s *Server) serverParams(baseURL string, revealed bool) map[string]any {
+@@ -850,6 +864,11 @@ func (s *Server) Shutdown(ctx context.Context) error {
+ 	s.mu.Lock()
+ 	if !s.closed {
+ 		s.closed = true
++		if s.enrollment != nil {
++			for id := range s.enrollment.machineTimers {
++				s.enrollment.stopMachineTimerLocked(id)
++			}
++		}
+ 		close(s.stopped)
+ 		s.extCancel()
+ 		for c := range s.clients {
+@@ -1092,6 +1111,9 @@ func (s *Server) serverParams(baseURL string, revealed bool) map[string]any {
  	// one but token, which only resumes one. A passkey registered by a
  	// guest makes the guest an account, and email and guest start one.
  	signup := slices.DeleteFunc(slices.Clone(authSchemes), func(scheme string) bool { return scheme == "token" })
@@ -546,12 +667,26 @@ index 9a507d0..6c320c7 100644
  	params := map[string]any{
  		"apron":        10,
  		"agent":        "apron-go/10",
-@@ -1366,7 +1383,7 @@ func (s *Server) processFrame(c *client, payload []byte) {
+@@ -1336,6 +1358,13 @@ func (s *Server) processFrame(c *client, payload []byte) {
+ 		return
+ 	}
+ 
++	s.mu.Lock()
++	expired := s.machineExpiredLocked(c)
++	closing := c.closing.Load()
++	s.unlock()
++	if expired || closing {
++		return
++	}
+ 	// parseRequest drops the id of a notification method, which a server
+ 	// may ignore, handling the frame as a notification (§1.1): activity and
+ 	// ping are never answered.
+@@ -1366,7 +1395,7 @@ func (s *Server) processFrame(c *client, payload []byte) {
  	s.mu.Lock()
  	// A connection being closed, as when its account is signed out, does
  	// nothing more: the frames it sent before are dropped.
 -	if c.closing.Load() {
-+	if c.closing.Load() || s.storeFailed {
++	if c.closing.Load() || s.storeFailed || s.machineExpiredLocked(c) {
  		s.unlock()
  		return
  	}

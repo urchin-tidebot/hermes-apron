@@ -40,3 +40,10 @@ member cannot expand its scope. Binding reconciles membership under the same ser
 can admit configured existing private rooms. Provision rooms as a human, then restart with
 those room and parent IDs in `--rooms`; no bot-side provisioning or inherited thread scope.
 Existing policy without room IDs grants no visibility until explicitly bound with operator scope.
+
+Machine expiry has one timer per identity. Binding/restoring schedules the persisted deadline;
+rotation, revocation and shutdown stop/remove timers. Generation checks make already-runnable
+old callbacks harmless. Dispatch checks the real clock as well, and room/message commit checks
+prevent a frame delayed in an extension filter from writing after expiry. Expiry signs out every
+connection of the machine identity. This does not change the documented independent bearer
+lifetime of HTTP media capabilities already issued.

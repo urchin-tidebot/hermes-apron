@@ -188,3 +188,16 @@ These are Python package artifacts, not a complete audited deployment release.
     `nix develop --command tools/test tests/test_adapter.py -k 'two_private or edit_is_bound' -q`:
     PASS, 2 passed / 17 deselected. Actual pinned Hermes handlers and Chromium passkeys retain
     two private parent/two child conversation isolation and room-bound edits under explicit scope.
+
+32. Independently reviewed MEDIUM machine active-socket expiry:
+    `tools/go test ./internal/server -run '^TestMachineExpiry' -count=1` RED, both tests:
+    `machine expiry left an authenticated socket alive`. The tests use actual 600/700 ms
+    deadlines and wait on sockets; no timestamps, stored expiries or clocks are fabricated.
+    GREEN: the same two tests under `-race -count=3` PASS. Both sockets close, a message
+    held in a real extension filter plus a pipelined frame cannot commit, fresh auth fails,
+    restart schedules the original deadline and another restart cannot renew an expired token.
+    Added upstream lifecycle regression covers replacement, revocation and shutdown timer cleanup.
+    Patch regeneration initially omitted the pre-existing untracked durability regression and
+    formatted an unrelated test; corrective local commit `e8f9746` restores both without rewriting history.
+    `tools/upstream-test -run 'TestMachineTimerLifecycle|TestClosedWrapperRequiresDurableSQLiteCommits' -count=1`:
+    PASS under race detection for patched apron/store; aproncmd correctly reports no matching tests.

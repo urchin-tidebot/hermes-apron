@@ -18,6 +18,7 @@ type enrolling struct {
 	machine string
 	rooms   []string
 	ttl     time.Duration
+	filter  func(context.Context, *apron.Draft) error
 }
 
 func (*enrolling) Name() string { return "closed" }
@@ -34,6 +35,9 @@ func (e *enrolling) Init(r *apron.Registrar) (err error) {
 			}
 			err = e.policy.BindMachine("hermes", e.machine, e.ttl, e.rooms)
 		}
+	}
+	if e.filter != nil {
+		r.FilterMessage(e.filter)
 	}
 	return
 }
