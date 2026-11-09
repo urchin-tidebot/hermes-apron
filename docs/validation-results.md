@@ -441,3 +441,16 @@ publication with known blockers retained. Safe affirmative consent, selective cr
 removal, broader native features, resource/crash testing and real LAN/TLS/device/recovery
 drills remain blocked or unverified as listed in the status matrix. No live services or
 production configuration were modified.
+
+## First remote CI run and checkout regression
+
+GitHub Actions run `42675406683` at `ec05472` passed the wrapper/upstream Go race
+suites, Go vet/gofmt and Python lint/format checks, then failed the source/history
+audit: the default shallow checkout did not contain baseline `b899490`. Frontend
+and browser/plugin steps were skipped, not passed.
+
+The checkout now requests `fetch-depth: 0` while retaining `persist-credentials: false`.
+A configuration regression test parsing the workflow observed RED (1 failed / 1 passed)
+then GREEN (2 passed) with the full-history checkout. Ruff check/format, the local
+content/history audit and `git diff --check` passed. A replacement remote CI result
+must still be verified; these local checks do not retroactively make the first run pass.
