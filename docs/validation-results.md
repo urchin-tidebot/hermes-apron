@@ -156,3 +156,19 @@ or raw Codex/test transcripts are committed. The custom audit checks private add
 28. Proxy example: `nix shell nixpkgs#caddy --command caddy adapt --config examples/lan-proxy.Caddyfile --adapter caddyfile`
     PASS syntax adaptation using Caddy 2.11.7, with a formatting warning. No listener, certificate load,
     TLS trust, firewall policy or network isolation test was performed. Documentation addresses only.
+
+29. Pinned Nix checks initially failed because Ruff tried to cache in a read-only Nix source.
+    Disabling that cache made `nix flake check --no-update-lock-file` PASS on x86_64-linux;
+    aarch64-linux was explicitly omitted as incompatible with this execution host.
+    `nix develop --command make check` first passed 14 Go tests, 32 Python tests and the patched
+    upstream race suites, then failed packaging because Nix's split GOROOT omits LICENSE.
+    Added the official pinned Go 1.27.3 BSD notice fallback; no test failure is hidden.
+30. Build-environment privacy: `test_public_build_tools_do_not_inherit_private_variables`
+    RED inherited synthetic Vite/runtime canaries; GREEN uses a resource-only SDK environment,
+    empty scratch npm configuration, uv --no-config, and disabled public-fetch credential config.
+    No real secret value was used in this test. `tools/build` then PASS with 28 runtime Go module
+    notices and Go's standard-library notice. This hardens future builds as well as runtime tests.
+
+`uv build --out-dir "$TMPDIR/hermes-apron-build"`: PASS wheel and Python sdist.
+Archive name/content audits: PASS (13 wheel files, 22 sdist files); no runtime state/credential files.
+These are Python package artifacts, not a complete audited deployment release.

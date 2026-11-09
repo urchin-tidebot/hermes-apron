@@ -2,6 +2,8 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 export GOWORK GOTOOLCHAIN=go1.27.3
+export GOENV=off GOFLAGS= NETRC=/dev/null GOPROXY=https://proxy.golang.org GOSUMDB=sum.golang.org
+export GOPRIVATE= GONOPROXY= GONOSUMDB= GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null GIT_TERMINAL_PROMPT=0
 GOWORK="$(python3 tools/prepare.py server)"
 cd "$(dirname "$GOWORK")"
 git submodule update --init --depth 1 testdata/apron

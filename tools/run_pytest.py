@@ -17,6 +17,6 @@ allowed = {
     "SSL_CERT_FILE",
     "CHROMIUM_EXECUTABLE",
 }
-env = {k: v for k, v in os.environ.items() if k in allowed}
+env = {name: os.environ[name] for name in allowed if name in os.environ}
 env["PYTHONHASHSEED"] = "0"
 raise SystemExit(subprocess.call([sys.executable, "-m", "pytest", *sys.argv[1:]], env=env))

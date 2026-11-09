@@ -49,7 +49,18 @@ def prepare(name):
             base.mkdir(mode=0o700, exist_ok=True)
 
             def git(*args):
-                subprocess.run(["git", "-C", str(base), *args], check=True, stdout=sys.stderr)
+                subprocess.run(
+                    [
+                        sys.executable,
+                        str(ROOT / "tools/public_run.py"),
+                        "git",
+                        "-C",
+                        str(base),
+                        *args,
+                    ],
+                    check=True,
+                    stdout=sys.stderr,
+                )
 
             git("init", "-q")
             git("fetch", "--quiet", "--depth", "1", PINS[name][0], PINS[name][1])

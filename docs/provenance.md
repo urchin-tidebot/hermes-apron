@@ -35,3 +35,12 @@ Source remains MIT; upstream licenses are not replaced. `tools/build` includes e
 The local frontend retains Apron's MIT notice and the bundled Nunito/Recursive font SIL Open Font License texts in `build/licenses`. Its npm dependencies retain their own notices (including DOMPurify Apache-2.0/MPL-2.0 and Markdown-it MIT); a reviewed redistribution must retain all required bundle/dependency notices. A complete independent transitive license compliance review remains a publication gate, not a claimed automated pass.
 
 Python wheels retain upstream dependency notices through normal package installation; this project's wheel contains its own MIT license. No Hermes core files or production configuration are bundled. CI action commits are pinned and use Node 24; remote CI itself has not run in this implementation session.
+
+Go notice fallback for Nix's split GOROOT is copied verbatim from
+[Go 1.27.3 LICENSE](https://github.com/golang/go/blob/go1.27.3/LICENSE), SHA-256
+`911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad`, retained at
+`third_party/go-LICENSE`. Final pinned Nix checks also exercise Python 3.14.10 and Ruff 0.17.4;
+initial host checks used Python 3.14.8/Ruff 0.15.14 and uv.lock retains dev Ruff 0.15.22.
+The requested Codex GPT 6.1 Sol high selection is an external session setting, not a source-code
+configuration; this implementation makes no model API calls and does not attest an uninspectable
+runtime model selector.

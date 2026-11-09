@@ -1,17 +1,27 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "$0")/.."
+project_root="$PWD"
 frontend_source="$(python3 tools/prepare.py web)"
+frontend_config="$(mktemp -d "$TMPDIR/apron-npm-config.XXXXXX")"
+trap 'rm -rf "$frontend_config"' EXIT
+: > "$frontend_config/user"
+: > "$frontend_config/global"
+export NPM_CONFIG_USERCONFIG="$frontend_config/user"
+export NPM_CONFIG_GLOBALCONFIG="$frontend_config/global"
+export NPM_CONFIG_CACHE="$TMPDIR/hermes-apron-public-npm-cache"
+export NPM_CONFIG_REGISTRY=https://registry.npmjs.org
+run_public() { python3 "$project_root/tools/public_run.py" "$@"; }
 cd "$frontend_source"
-git submodule update --init --depth 1 >&2
-npm ci --ignore-scripts >&2
-npm run prepare >&2
-npm run check >&2
-npm audit --omit=dev --audit-level=moderate >&2
+run_public git submodule update --init --depth 1 >&2
+run_public npm ci --ignore-scripts >&2
+run_public npm run prepare >&2
+run_public npm run check >&2
+run_public npm audit --omit=dev --audit-level=moderate >&2
 if [[ "${1:-}" == "--test" ]]; then
-  npm test -- --testTimeout=20000 >&2
+  run_public npm test -- --testTimeout=20000 >&2
 fi
-VITE_LOCAL_ONLY=1 VITE_DEFAULT_SERVER_URL='' npm run build >&2
+run_public env VITE_LOCAL_ONLY=1 VITE_DEFAULT_SERVER_URL='' npm run build >&2
 mkdir -p build/licenses
 cp LICENSE build/licenses/apron-web-MIT.txt
 cp src/lib/assets/fonts/OFL-*.txt build/licenses/

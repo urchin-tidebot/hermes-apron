@@ -18,8 +18,8 @@
           nativeBuildInputs = [ pkgs.ruff pkgs.go pkgs.python314 ];
         } ''
           cd ${self}
-          ruff check hermes_apron tests tools/*.py __init__.py
-          ruff format --check hermes_apron tests tools/*.py __init__.py
+          ruff check --no-cache hermes_apron tests tools/*.py __init__.py
+          ruff format --no-cache --check hermes_apron tests tools/*.py __init__.py
           test -z "$(gofmt -l cmd internal)"
           python3 tools/audit.py --source-only
           touch $out

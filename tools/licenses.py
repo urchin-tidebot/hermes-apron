@@ -21,7 +21,11 @@ while raw.strip():
     if module:
         modules[module["Path"]] = module
 goroot = Path(subprocess.check_output([str(ROOT / "tools/go"), "env", "GOROOT"], text=True).strip())
-(output / "Go-LICENSE").write_bytes((goroot / "LICENSE").read_bytes())
+stdlib_notice = goroot / "LICENSE"
+if not stdlib_notice.is_file():
+    # Nix's split GOROOT omits this file; retain the official pinned notice.
+    stdlib_notice = ROOT / "third_party/go-LICENSE"
+(output / "Go-LICENSE").write_bytes(stdlib_notice.read_bytes())
 notices = []
 for name, module in sorted(modules.items()):
     directory = Path(module["Dir"])
