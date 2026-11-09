@@ -172,3 +172,45 @@ or raw Codex/test transcripts are committed. The custom audit checks private add
 `uv build --out-dir "$TMPDIR/hermes-apron-build"`: PASS wheel and Python sdist.
 Archive name/content audits: PASS (13 wheel files, 22 sdist files); no runtime state/credential files.
 These are Python package artifacts, not a complete audited deployment release.
+
+## Final verification (2026-11-09)
+
+`nix develop --command make check`: **PASS (exit 0)** with the final implementation.
+This ran `tools/go test -race ./...` (14 top-level server tests), `tools/test -q`
+(33 PASS, 23.79s, including real Hermes APIs, real Go server and Chromium virtual
+authenticator/local frontend), and `tools/upstream-test` (real patched apron,
+aproncmd and store race suites PASS). Go vet/gofmt, Ruff lint and formatting
+(22 files), binary build, 28 runtime Go-module notices plus Go's notice,
+source/added-history audit, govulncheck v1.9.0 and Python OSV audit all passed.
+Govulncheck reported no vulnerabilities; OSV queried 40 public locked packages
+with zero reported findings. Advisory results are time-dependent.
+
+`nix flake check --no-update-lock-file`: **PASS (exit 0)** on x86_64-linux.
+The final source derivation was cached; an earlier uncached execution passed
+after the documented Ruff-cache fix. The incompatible aarch64-linux system
+was omitted, not tested.
+
+`python3 tools/audit.py`: PASS, 67 source files and six added implementation
+commits before this evidence-only commit. `git diff --check`: PASS.
+`nix develop --command gitleaks git --redact --no-banner --log-opts='b899490..HEAD' .`:
+PASS, six commits scanned, no leaks. The working-directory gitleaks scan also
+passed. These checks supplement the exercised disposable runtime canaries;
+they are not an independent security or publication review.
+
+The first final `tools/frontend --test` attempt failed during Svelte setup with
+missing installed development-package imports after npm ci. This is a tooling
+failure, not behavioral TDD RED evidence; the cause has not been established.
+A fresh invocation is recorded separately below. No failed run is counted as
+a pass and no automatic dependency upgrade was used to bypass it.
+
+Fresh `tools/frontend --test`: **PASS (exit 0)**. Clean npm ci, explicit prepare,
+Svelte check (0 errors/0 warnings), runtime audit (0 vulnerabilities), 200 test
+files / 1691 tests (64.17s) and the local-only static build passed. The five
+low-severity development-only findings and jsdom canvas warning remain as
+documented above. This rerun required no source or lockfile change.
+
+Original REQUIREMENTS.md and VALIDATION.md are unchanged from b899490. Only
+disposable loopback fixtures ran; no LAN deployment, active service changes,
+production credential reads, push, PR, fork or release occurred. Manual TLS,
+device/network and backup/restore checks and the other matrix release gates
+remain NOT RUN or BLOCKED.

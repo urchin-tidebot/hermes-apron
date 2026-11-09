@@ -2,6 +2,10 @@
 
 **Working development implementation; not deployed, independently audited, released or production-ready.** The original acceptance contract is unchanged. “Automated” below describes executed evidence, not completion of every subcase. Manual and blocked items are not counted as passes. See the [execution ledger](validation-results.md) and [threat model](threat-model.md).
 
+Final pinned-Nix `make check` passes: 14 top-level Go server tests, 33 Python/browser
+tests, real patched upstream race suites, lint/build/notices and dependency/content
+audits. The execution ledger retains earlier failures and the full frontend results.
+
 ## Security / architecture
 
 | IDs | Status | Evidence and limits |
