@@ -69,7 +69,7 @@ class ApronAdapter(BasePlatformAdapter):
         )
 
     async def connect(self, *, is_reconnect=False):
-        if self.state is not None:
+        if self.state is not None or self.worker is not None:
             await self.disconnect()
         try:
             self.state = State(self.options.state_dir)
@@ -162,6 +162,13 @@ class ApronAdapter(BasePlatformAdapter):
                     await asyncio.sleep(delay)
                     try:
                         token = await asyncio.to_thread(read_secret, self.options.token_file)
+                        if not self.credential_lease.matches(self.options.endpoint, token):
+                            self._set_fatal_error(
+                                "credential_changed",
+                                "Apron runtime credential changed; controlled restart required",
+                                retryable=False,
+                            )
+                            return
                         transport = Transport(
                             self.options.endpoint,
                             self.options.url,
@@ -185,6 +192,7 @@ class ApronAdapter(BasePlatformAdapter):
         except asyncio.CancelledError:
             raise
         finally:
+            await self._close_resources()
             self._mark_disconnected()
 
     async def _consume_once(self):
@@ -261,6 +269,9 @@ class ApronAdapter(BasePlatformAdapter):
             self.worker.cancel()
             await asyncio.gather(self.worker, return_exceptions=True)
             self.worker = None
+        await self._close_resources()
+
+    async def _close_resources(self):
         tasks = list(self._background_tasks)
         for task in tasks:
             task.cancel()
@@ -280,6 +291,7 @@ class ApronAdapter(BasePlatformAdapter):
         if self.credential_lease:
             self.credential_lease.close()
             self.credential_lease = None
+        self.joined.clear()
         self._mark_disconnected()
 
     def _target(self, chat_id, metadata=None):

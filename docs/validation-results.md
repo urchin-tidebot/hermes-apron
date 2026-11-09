@@ -201,3 +201,12 @@ These are Python package artifacts, not a complete audited deployment release.
     formatted an unrelated test; corrective local commit `e8f9746` restores both without rewriting history.
     `tools/upstream-test -run 'TestMachineTimerLifecycle|TestClosedWrapperRequiresDurableSQLiteCommits' -count=1`:
     PASS under race detection for patched apron/store; aproncmd correctly reports no matching tests.
+33. Independently reviewed HIGH reconnect/lease credential rotation:
+    `nix develop --command env TMPDIR=<scratch> tools/test tests/test_peer_security.py -q`
+    RED: the adapter authenticated token B while a real second process already consumed B,
+    holding only A's lease (`adapter authenticated rotated credential without its consumer lease`).
+    Initial child registration used a mismatched Hermes profile scope; that setup failure is not RED.
+    GREEN with a fixed fingerprint/lease match before reconnect: changed file produces the real
+    Hermes nonretryable `credential_changed` status, closes tasks/connections/state/lease, and
+    never authenticates B. The child remains exclusive; controlled restart acquires B after child
+    exit. Focused rotation/reconnect/second-consumer suite PASS: 3 passed / 17 deselected.

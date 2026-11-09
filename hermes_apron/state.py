@@ -84,6 +84,13 @@ class CredentialLease:
                 raise ValueError("Apron credential already has a consumer")
             self._held.add(self.identity)
 
+    def matches(self, endpoint, token):
+        import hashlib
+        import hmac
+
+        identity = hashlib.sha256((endpoint + "\0" + token).encode()).hexdigest()
+        return hmac.compare_digest(self.identity, identity)
+
     def close(self):
         from gateway.status_scoped_locks import release_scoped_lock
 
