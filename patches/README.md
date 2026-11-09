@@ -32,3 +32,11 @@ message commit boundary. SQLite uses synchronous FULL (with an actual connection
 Human token expiry limits new resumption; active sockets still require explicit revocation/closure.
 The workspace pins current dependency security fixes above the original module minimums; see
 [provenance](../docs/provenance.md). These controls have regression tests but remain unaudited.
+
+Machine credentials persist an exact operator room-ID scope. The shared room visibility rule
+checks that scope (including explicit thread ancestors), and reads, posts, edits, commands,
+activity and embed creation use it. Machine room creation is denied; adding a machine as a
+member cannot expand its scope. Binding reconciles membership under the same server lock and
+can admit configured existing private rooms. Provision rooms as a human, then restart with
+those room and parent IDs in `--rooms`; no bot-side provisioning or inherited thread scope.
+Existing policy without room IDs grants no visibility until explicitly bound with operator scope.

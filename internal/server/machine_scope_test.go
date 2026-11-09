@@ -1,0 +1,93 @@
+package server
+
+import (
+	"context"
+	"crypto/rand"
+	"github.com/apron-chat/apron-server-go/apron"
+	"github.com/apron-chat/apron-server-go/store"
+	"net/http/httptest"
+	"path/filepath"
+	"testing"
+	"time"
+)
+
+func TestMachineRoomScope(t *testing.T) {
+	e := &enrolling{machine: rand.Text() + rand.Text()}
+	path := filepath.Join(t.TempDir(), "scope.db")
+	open := func(e *enrolling) (*apron.Server, *httptest.Server) {
+		s, h, _ := enrollmentServer(t, func(c *apron.Config) {
+			c.Extensions = []apron.Extension{e}
+			var err error
+			c.Store, err = store.OpenSQLite(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+		})
+		return s, h
+	}
+	s, h := open(e)
+	invite, err := e.policy.Issue(time.Minute, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	human := dial(t, h.URL)
+	a := authn(t)
+	o := begin(t, human, "register", invite)
+	result(t, finish(t, human, "register", o, a.registration(t, o, origin, "localhost", 0x45)))
+	bot := dial(t, h.URL)
+	result(t, bot.call(t, "auth", map[string]any{"scheme": "token", "token": e.machine}))
+	public := result(t, human.call(t, "room_set", map[string]any{"title": "Outside public"}))["room_id"].(string)
+	private := result(t, human.call(t, "room_set", map[string]any{"title": "Outside private", "private": true}))["room_id"].(string)
+	child := result(t, human.call(t, "room_set", map[string]any{"parent_room_id": "general", "title": "Outside thread"}))["room_id"].(string)
+	for _, room := range []string{public, private, child} {
+		t.Run(room, func(t *testing.T) {
+			posted := result(t, human.call(t, "message", map[string]any{"room_id": room, "body": map[string]any{"text": "outside marker", "embeds": []any{map[string]any{"kind": "upload", "name": "fixture.txt", "size": 1}}}}))
+			for _, method := range []string{"room_list", "history", "room_join", "room_set"} {
+				denied(t, bot.call(t, method, map[string]any{"room_id": room, "typing": 1}))
+			}
+			denied(t, bot.call(t, "message", map[string]any{"room_id": room, "body": map[string]any{"text": "outside post", "embeds": []any{map[string]any{"kind": "upload", "name": "x", "size": 1}}}}))
+			denied(t, bot.call(t, "message", map[string]any{"room_id": "general", "reply_to": map[string]any{"message_id": posted["message_id"]}, "body": map[string]any{"text": "outside reply"}}))
+			denied(t, bot.call(t, "room_join", map[string]any{"room_id": room, "user_id": "hermes"}))
+		})
+	}
+	for _, params := range []map[string]any{{"title": "Extra"}, {"title": "Extra private", "private": true}, {"parent_room_id": "general", "title": "Extra thread"}} {
+		denied(t, bot.call(t, "room_set", params))
+	}
+	for _, method := range []string{"room_list", "history"} {
+		r := result(t, bot.call(t, method, map[string]any{}))
+		for _, key := range []string{"joined", "not_joined", "rooms", "messages"} {
+			entries, _ := r[key].([]any)
+			for _, value := range entries {
+				if room, _ := value.(map[string]any)["room_id"].(string); room != "general" {
+					t.Fatal("scope leaked in aggregate", method, key, room)
+				}
+			}
+		}
+	}
+	result(t, bot.call(t, "message", map[string]any{"room_id": "general", "body": map[string]any{"text": "configured works"}}))
+	// A human membership grant cannot expand operator scope, even for a private room.
+	denied(t, human.call(t, "room_join", map[string]any{"room_id": private, "user_id": "hermes"}))
+	bot.c.CloseNow()
+	human.c.CloseNow()
+	h.Close()
+	s.Shutdown(context.Background())
+	e = &enrolling{machine: e.machine, rooms: []string{"general", private, child}}
+	s, h = open(e)
+	bot = dial(t, h.URL)
+	result(t, bot.call(t, "auth", map[string]any{"scheme": "token", "token": e.machine}))
+	for _, room := range e.rooms {
+		result(t, bot.call(t, "history", map[string]any{"room_id": room}))
+		result(t, bot.call(t, "message", map[string]any{"room_id": room, "body": map[string]any{"text": "explicit private/thread works"}}))
+	}
+	denied(t, bot.call(t, "history", map[string]any{"room_id": public}))
+	bot.c.CloseNow()
+	h.Close()
+	s.Shutdown(context.Background())
+	// The persisted exact scope remains valid on a second start with the same credential.
+	_, h = open(&enrolling{machine: e.machine, rooms: e.rooms})
+	bot = dial(t, h.URL)
+	result(t, bot.call(t, "auth", map[string]any{"scheme": "token", "token": e.machine}))
+	result(t, bot.call(t, "history", map[string]any{"room_id": private}))
+	denied(t, bot.call(t, "room_join", map[string]any{"room_id": public}))
+
+}

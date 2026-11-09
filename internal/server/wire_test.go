@@ -349,7 +349,7 @@ func TestMachineMustBeJoinedToPost(t *testing.T) {
 	defer h.Close()
 	w := dial(t, h.URL)
 	result(t, w.call(t, "auth", map[string]any{"scheme": "token", "token": e.machine}))
-	room := result(t, w.call(t, "room_set", map[string]any{"title": "Fixture room"}))["room_id"]
+	room := "general"
 	result(t, w.call(t, "room_leave", map[string]any{"room_id": room}))
 	denied(t, w.call(t, "message", map[string]any{"room_id": room, "body": map[string]any{"text": "not joined"}}))
 }

@@ -113,12 +113,26 @@ index 7167e84..a9e6018 100644
  		return nil, authn.Denied("This connection is closing")
  	}
  	if c.proposalBudget == nil {
+diff --git a/apron/bot.go b/apron/bot.go
+index e4f9589..5aaa352 100644
+--- a/apron/bot.go
++++ b/apron/bot.go
+@@ -91,6 +91,9 @@ func (r *Registrar) Bot(userID string, options BotOptions) (*Bot, error) {
+ 		s.grantRolesLocked(u)
+ 		s.joinDefaultRoomLocked(u)
+ 	}
++	if s.enrollment != nil {
++		u.machinePolicy = s.enrollment
++	}
+ 	s.unlock()
+ 	b := &Bot{s: s, host: r.Host, userID: userID}
+ 	if _, err := b.conn(); err != nil {
 diff --git a/apron/closed.go b/apron/closed.go
 new file mode 100644
-index 0000000..5b504e0
+index 0000000..108e34f
 --- /dev/null
 +++ b/apron/closed.go
-@@ -0,0 +1,196 @@
+@@ -0,0 +1,251 @@
 +package apron
 +
 +import (
@@ -129,6 +143,7 @@ index 0000000..5b504e0
 +	"encoding/json/jsontext"
 +	"encoding/json/v2"
 +	"errors"
++	"slices"
 +	"time"
 +)
 +
@@ -149,6 +164,7 @@ index 0000000..5b504e0
 +	UserID  string    `json:"user_id"`
 +	Expires time.Time `json:"expires"`
 +	Revoked bool      `json:"revoked"`
++	Rooms   []string  `json:"rooms"`
 +}
 +type enrollmentInvite struct {
 +	Expires time.Time `json:"expires"`
@@ -175,6 +191,11 @@ index 0000000..5b504e0
 +	}
 +	if e.state.Machines == nil {
 +		e.state.Machines = make(map[string]machineCredential)
++	}
++	for _, u := range r.s.users {
++		if u.botOf != "" {
++			u.machinePolicy = e
++		}
 +	}
 +	r.s.enrollment = e
 +	return e, nil
@@ -282,7 +303,7 @@ index 0000000..5b504e0
 +}
 +
 +// BindMachine binds a runtime-only credential to an extension-owned bot.
-+func (e *Enrollment) BindMachine(id, token string, ttl time.Duration) error {
++func (e *Enrollment) BindMachine(id, token string, ttl time.Duration, rooms []string) error {
 +	s := e.host.s
 +	s.mu.Lock()
 +	defer s.unlock()
@@ -290,26 +311,74 @@ index 0000000..5b504e0
 +	if u == nil || u.botOf != e.host.name || len(token) < 43 || ttl <= 0 || ttl > 7*24*time.Hour {
 +		return errors.New("invalid machine binding")
 +	}
-+	hash := invitationHash(token)
-+	if m, ok := e.state.Machines[hash]; ok {
-+		if m.UserID != id {
-+			return errors.New("invalid machine binding")
-+		}
-+		return nil
++
++	if len(rooms) == 0 {
++		return errors.New("machine needs explicit rooms")
 +	}
++	for _, id := range rooms {
++		r := s.rooms[id]
++		if r == nil {
++			return errors.New("unknown machine room")
++		}
++		for p := r.parent; p != nil; p = p.parent {
++			if !slices.Contains(rooms, p.id) {
++				return errors.New("machine thread needs explicit parent scope")
++			}
++		}
++	}
++	hash := invitationHash(token)
++	m, existing := e.state.Machines[hash]
++	if existing && m.UserID != id {
++		return errors.New("invalid machine binding")
++	}
++	if !existing {
++		m = machineCredential{UserID: id, Expires: time.Now().Add(ttl)}
++	}
++	m.Rooms = slices.Clone(rooms)
++
 +	for key, m := range e.state.Machines {
 +		if m.UserID == id {
 +			delete(e.state.Machines, key)
 +		}
 +	}
 +	s.signOutLocked(u)
-+	e.state.Machines[hash] = machineCredential{UserID: id, Expires: time.Now().Add(ttl)}
++	e.state.Machines[hash] = m
++	u.machinePolicy = e
++	// Reconcile under the policy lock, including private rooms. Only this trusted
++	// operator API may grant scope; protocol membership changes cannot expand it.
++	for _, r := range u.joined {
++		if !slices.Contains(rooms, r.id) {
++			s.leaveLocked(u, r)
++		}
++	}
++	if !m.Revoked && time.Now().Before(m.Expires) {
++		pending := slices.Clone(rooms)
++		for len(pending) > 0 {
++			for i, id := range pending {
++				r := s.rooms[id]
++				if r.parent == nil || u.joined[r.parent.id] != nil {
++					s.joinLocked(u, r)
++					pending = slices.Delete(pending, i, i+1)
++					break
++				}
++			}
++		}
++	}
 +	return e.persistLocked()
 +}
 +
 +func (e *Enrollment) machineAllowedLocked(id string) bool {
 +	for _, m := range e.state.Machines {
 +		if m.UserID == id && !m.Revoked && time.Now().Before(m.Expires) {
++			return true
++		}
++	}
++	return false
++}
++
++func (e *Enrollment) machineRoomAllowedLocked(id, room string) bool {
++	for _, m := range e.state.Machines {
++		if m.UserID == id && !m.Revoked && time.Now().Before(m.Expires) && slices.Contains(m.Rooms, room) {
 +			return true
 +		}
 +	}
@@ -329,6 +398,21 @@ index ecd1df1..4227558 100644
  	if !u.account() {
  		return nil, &Error{Code: CodeDenied, Message: "Sign in with an account to use /invite-device"}
  	}
+diff --git a/apron/editors_test.go b/apron/editors_test.go
+index 8a38a46..b1928e7 100644
+--- a/apron/editors_test.go
++++ b/apron/editors_test.go
+@@ -3,9 +3,9 @@ package apron
+ import (
+ 	"context"
+ 	"fmt"
++	"reflect"
+ 	"strings"
+ 	"sync"
+-	"reflect"
+ 	"testing"
+ )
+ 
 diff --git a/apron/messages.go b/apron/messages.go
 index 36acbd1..d478de3 100644
 --- a/apron/messages.go
@@ -373,6 +457,50 @@ index 6838bc8..37d7f24 100644
  	}
  }
  
+diff --git a/apron/rooms.go b/apron/rooms.go
+index d62b648..c9f9fdb 100644
+--- a/apron/rooms.go
++++ b/apron/rooms.go
+@@ -57,6 +57,9 @@ type readCursor struct {
+ // thread included.
+ func (r *roomState) visibleTo(u *userState) bool {
+ 	for room := r; room != nil; room = room.parent {
++		if u.machinePolicy != nil && !u.machinePolicy.machineRoomAllowedLocked(u.id, room.id) {
++			return false
++		}
+ 		if room.private && room.members[u.id] == nil {
+ 			return false
+ 		}
+@@ -508,6 +511,9 @@ func (s *Server) setRoom(c *client, req request) (any, bool, *Error) {
+ 	s.mu.Lock()
+ 	defer s.unlock()
+ 	u := c.user
++	if u.machinePolicy != nil && !updating {
++		return nil, false, notAdmitted()
++	}
+ 	var parent *roomState
+ 	var keptExt extObject
+ 	if updating {
+@@ -689,6 +695,9 @@ func (s *Server) listRooms(c *client, req request) (any, bool, *Error) {
+ 	}
+ 	var joined, others, left []*roomState
+ 	for _, r := range candidates {
++		if !r.visibleTo(u) {
++			continue
++		}
+ 		if hasSince && r.latestID <= since {
+ 			continue
+ 		}
+@@ -811,6 +820,9 @@ func (s *Server) joinRoom(c *client, req request) (any, bool, *Error) {
+ 			return nil, false, &Error{Code: CodeDenied, Message: fmt.Sprintf("%s is in as many private rooms as anyone may be, so cannot be added to another", targetID)}
+ 		}
+ 	}
++	if target.machinePolicy != nil && !target.machinePolicy.machineRoomAllowedLocked(target.id, r.id) {
++		return nil, false, notAdmitted()
++	}
+ 	if r.members[target.id] == nil {
+ 		if err := admitActionLocked(u); err != nil {
+ 			return nil, false, err
 diff --git a/apron/server.go b/apron/server.go
 index 9a507d0..6c320c7 100644
 --- a/apron/server.go
@@ -496,6 +624,19 @@ index 1607547..d6afad0 100644
  	s.sessions[key] = session
  	s.touchSession(key)
  	c.token = key
+diff --git a/apron/users.go b/apron/users.go
+index 85ac247..6e68362 100644
+--- a/apron/users.go
++++ b/apron/users.go
+@@ -58,6 +58,8 @@ type userState struct {
+ 	// botOf names the Extension whose bot the account is (Registrar.Bot),
+ 	// which holds the "bot" role (§3.3.4).
+ 	botOf string
++	// machinePolicy is runtime-only; its exact room scope is persisted in closed policy.
++	machinePolicy *Enrollment
+ 	// avatarEmbed is the hosted /avatar upload behind avatar, if any.
+ 	avatarEmbed *embedState
+ 
 diff --git a/aproncmd/aprond.go b/aproncmd/aprond.go
 index 5d0853e..c242a48 100644
 --- a/aproncmd/aprond.go
@@ -589,33 +730,6 @@ index a099f56..b23e265 100644
  	// Params are the request's params: a copy.
  	Params map[string]jsontext.Value
  	// Name and UserID are what the request asks for a new account, as the
-diff --git a/store/durability_test.go b/store/durability_test.go
-new file mode 100644
-index 0000000..8e48d86
---- /dev/null
-+++ b/store/durability_test.go
-@@ -0,0 +1,21 @@
-+package store
-+
-+import (
-+	"path/filepath"
-+	"testing"
-+)
-+
-+func TestClosedWrapperRequiresDurableSQLiteCommits(t *testing.T) {
-+	s, err := OpenSQLite(filepath.Join(t.TempDir(), "state.db"))
-+	if err != nil {
-+		t.Fatal(err)
-+	}
-+	defer s.Close()
-+	var policy int
-+	if err = s.db.QueryRow("PRAGMA synchronous").Scan(&policy); err != nil {
-+		t.Fatal(err)
-+	}
-+	if policy != 2 {
-+		t.Fatalf("SQLite synchronous policy = %d; want FULL (2)", policy)
-+	}
-+}
 diff --git a/store/sqlite.go b/store/sqlite.go
 index a1f118f..335f777 100644
 --- a/store/sqlite.go

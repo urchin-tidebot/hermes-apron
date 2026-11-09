@@ -1,12 +1,9 @@
 package server
 
 import (
-	"context"
-	"encoding/json"
 	"fmt"
 	"github.com/apron-chat/apron-server-go/apron"
 	"net/http"
-	"slices"
 	"time"
 )
 
@@ -29,35 +26,11 @@ func (p *Closed) Init(r *apron.Registrar) error {
 		if len(p.Rooms) == 0 {
 			return fmt.Errorf("machine identity needs explicit rooms")
 		}
-		bot, err := r.Bot("hermes", apron.BotOptions{Name: "Hermes"})
+		_, err := r.Bot("hermes", apron.BotOptions{Name: "Hermes"})
 		if err != nil {
 			return err
 		}
-		raw, err := bot.Call(context.Background(), "room_list", map[string]any{"filter": "joined"})
-		if err != nil {
-			return err
-		}
-		var joined struct {
-			Joined []struct {
-				ID string `json:"room_id"`
-			}
-		}
-		if err = json.Unmarshal(raw, &joined); err != nil {
-			return err
-		}
-		for _, room := range joined.Joined {
-			if !slices.Contains(p.Rooms, room.ID) {
-				if _, err = bot.Call(context.Background(), "room_leave", map[string]any{"room_id": room.ID}); err != nil {
-					return err
-				}
-			}
-		}
-		for _, room := range p.Rooms {
-			if err = bot.Join(context.Background(), room); err != nil {
-				return err
-			}
-		}
-		if err = p.Enrollment.BindMachine("hermes", p.Machine, 7*24*time.Hour); err != nil {
+		if err = p.Enrollment.BindMachine("hermes", p.Machine, 7*24*time.Hour, p.Rooms); err != nil {
 			return err
 		}
 	}

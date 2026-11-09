@@ -172,3 +172,19 @@ or raw Codex/test transcripts are committed. The custom audit checks private add
 `uv build --out-dir "$TMPDIR/hermes-apron-build"`: PASS wheel and Python sdist.
 Archive name/content audits: PASS (13 wheel files, 22 sdist files); no runtime state/credential files.
 These are Python package artifacts, not a complete audited deployment release.
+
+31. Independently reviewed HIGH machine scope finding (snapshot `272afba`):
+    `tools/go test ./internal/server -run '^TestMachineRoomScope$' -count=1` RED:
+    `room_list` returned an unconfigured public room. An activity notification was initially
+    tested as an RPC and timed out; that fixture error was removed and is not RED evidence.
+    GREEN: `tools/go test -race ./internal/server -run '^TestMachine(RoomScope|MustBeJoinedToPost)$' -count=1`
+    PASS. Exact scope persists with the credential; public/private/unconfigured child rooms,
+    targeted and aggregate history/lists, cross-scope replies, upload posts, joins and creates
+    are denied. Explicit private/thread scope works after SQLite restart and remains restricted
+    on another restart. A human cannot expand bot scope with membership. Hermes fixtures now
+    provision as humans and restart with explicit operator scope; their results follow below.
+    Current public protocol retrieved via curl: v10, updated 2026-10-30 (web tool unavailable
+    for that URL); pinned protocol fixtures remain authoritative for tested compatibility.
+    `nix develop --command tools/test tests/test_adapter.py -k 'two_private or edit_is_bound' -q`:
+    PASS, 2 passed / 17 deselected. Actual pinned Hermes handlers and Chromium passkeys retain
+    two private parent/two child conversation isolation and room-bound edits under explicit scope.
