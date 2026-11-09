@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"github.com/apron-chat/apron-server-go/apron"
 	"github.com/apron-chat/apron-server-go/store"
+	"github.com/coder/websocket"
 	"net/http/httptest"
 	"path/filepath"
 	"testing"
@@ -90,4 +91,43 @@ func TestMachineRoomScope(t *testing.T) {
 	result(t, bot.call(t, "history", map[string]any{"room_id": private}))
 	denied(t, bot.call(t, "room_join", map[string]any{"room_id": public}))
 
+}
+
+// Thread metadata is broadcast to parent members upstream, even if they have
+// never joined the child. Exact operator scope must also govern those deliveries.
+func TestMachineRoomScopeLiveMetadata(t *testing.T) {
+	e := &enrolling{machine: rand.Text() + rand.Text()}
+	_, h, _ := enrollmentServer(t, func(c *apron.Config) { c.Extensions = []apron.Extension{e} })
+	invite, err := e.policy.Issue(time.Minute, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	human := dial(t, h.URL)
+	a := authn(t)
+	o := begin(t, human, "register", invite)
+	result(t, finish(t, human, "register", o, a.registration(t, o, origin, "localhost", 0x45)))
+	bot := dial(t, h.URL)
+	result(t, bot.call(t, "auth", map[string]any{"scheme": "token", "token": e.machine}))
+	child := result(t, human.call(t, "room_set", map[string]any{"parent_room_id": "general", "title": "Out of scope thread metadata"}))["room_id"]
+	result(t, human.call(t, "room_set", map[string]any{"room_id": child, "title": "Out of scope update"}))
+	if err = bot.c.Write(bot.ctx, websocket.MessageText, []byte(`{"id":"scope-barrier","method":"room_list","params":{"filter":"joined"}}`)); err != nil {
+		t.Fatal(err)
+	}
+	for {
+		frame := bot.read(t)
+		if frame["id"] == "scope-barrier" {
+			break
+		}
+		if frame["method"] == "room_update" {
+			params := frame["params"].(map[string]any)
+			for _, key := range []string{"joined", "updated", "left"} {
+				records, _ := params[key].([]any)
+				for _, value := range records {
+					if value.(map[string]any)["room_id"] == child {
+						t.Fatal("unconfigured child metadata broadcast to scoped parent member")
+					}
+				}
+			}
+		}
+	}
 }

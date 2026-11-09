@@ -210,3 +210,10 @@ These are Python package artifacts, not a complete audited deployment release.
     Hermes nonretryable `credential_changed` status, closes tasks/connections/state/lease, and
     never authenticates B. The child remains exclusive; controlled restart acquires B after child
     exit. Focused rotation/reconnect/second-consumer suite PASS: 3 passed / 17 deselected.
+34. Completing independently reviewed machine-scope finding: live thread metadata.
+    `tools/go test ./internal/server -run '^TestMachineRoomScopeLiveMetadata$' -count=1`
+    RED: unconfigured child metadata broadcast to scoped parent member. Upstream announces
+    new/changed public threads to parent members independently of room listing. GREEN after
+    shared visibility checks on thread announcements and room/membership deliveries, plus
+    suppressing left records for children outside machine scope:
+    `tools/go test -race ./internal/server -run '^TestMachine' -count=1` PASS.

@@ -552,7 +552,7 @@ index 6838bc8..37d7f24 100644
  }
  
 diff --git a/apron/rooms.go b/apron/rooms.go
-index d62b648..c9f9fdb 100644
+index d62b648..5782ca2 100644
 --- a/apron/rooms.go
 +++ b/apron/rooms.go
 @@ -57,6 +57,9 @@ type readCursor struct {
@@ -565,7 +565,46 @@ index d62b648..c9f9fdb 100644
  		if room.private && room.members[u.id] == nil {
  			return false
  		}
-@@ -508,6 +511,9 @@ func (s *Server) setRoom(c *client, req request) (any, bool, *Error) {
+@@ -198,7 +201,7 @@ func (s *Server) deliverLocked(frame any, rooms ...*roomState) {
+ 	seen := make(map[string]bool)
+ 	for _, r := range rooms {
+ 		for id, member := range r.members {
+-			if !seen[id] {
++			if !seen[id] && r.visibleTo(member) {
+ 				seen[id] = true
+ 				member.send(frame)
+ 			}
+@@ -243,7 +246,7 @@ func (s *Server) logMembershipLocked(u *userState, r *roomState, joined bool) js
+ func (s *Server) deliverMembershipLocked(membership jsontext.Value, r *roomState, u *userState) {
+ 	frame := roomUpdate("memberships", membership)
+ 	for id, member := range r.members {
+-		if id != u.id {
++		if id != u.id && r.visibleTo(member) {
+ 			member.send(frame)
+ 		}
+ 	}
+@@ -381,6 +384,9 @@ func (s *Server) hideThreadsLocked(u *userState, r *roomState) {
+ 	var walk func(*roomState)
+ 	walk = func(room *roomState) {
+ 		for _, thread := range room.children {
++			if u.machinePolicy != nil && !u.machinePolicy.machineRoomAllowedLocked(u.id, thread.id) {
++				continue
++			}
+ 			switch {
+ 			case thread.private && thread.members[u.id] == nil:
+ 			case thread.private:
+@@ -448,7 +454,9 @@ func (s *Server) announceRoomLocked(r *roomState, editor *userState) {
+ 	}
+ 	frame := roomUpdate("updated", s.roomParamsLocked(r))
+ 	for _, member := range audience {
+-		member.send(frame)
++		if r.visibleTo(member) {
++			member.send(frame)
++		}
+ 	}
+ }
+ 
+@@ -508,6 +516,9 @@ func (s *Server) setRoom(c *client, req request) (any, bool, *Error) {
  	s.mu.Lock()
  	defer s.unlock()
  	u := c.user
@@ -575,7 +614,16 @@ index d62b648..c9f9fdb 100644
  	var parent *roomState
  	var keptExt extObject
  	if updating {
-@@ -689,6 +695,9 @@ func (s *Server) listRooms(c *client, req request) (any, bool, *Error) {
+@@ -577,7 +588,7 @@ func (s *Server) setRoom(c *client, req request) (any, bool, *Error) {
+ 		if parent != nil && !r.private {
+ 			frame := roomUpdate("updated", s.roomParamsLocked(r))
+ 			for id, member := range parent.members {
+-				if id != u.id {
++				if id != u.id && r.visibleTo(member) {
+ 					member.send(frame)
+ 				}
+ 			}
+@@ -689,6 +700,9 @@ func (s *Server) listRooms(c *client, req request) (any, bool, *Error) {
  	}
  	var joined, others, left []*roomState
  	for _, r := range candidates {
@@ -585,7 +633,7 @@ index d62b648..c9f9fdb 100644
  		if hasSince && r.latestID <= since {
  			continue
  		}
-@@ -811,6 +820,9 @@ func (s *Server) joinRoom(c *client, req request) (any, bool, *Error) {
+@@ -811,6 +825,9 @@ func (s *Server) joinRoom(c *client, req request) (any, bool, *Error) {
  			return nil, false, &Error{Code: CodeDenied, Message: fmt.Sprintf("%s is in as many private rooms as anyone may be, so cannot be added to another", targetID)}
  		}
  	}
