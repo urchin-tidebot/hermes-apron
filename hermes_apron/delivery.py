@@ -4,6 +4,7 @@ import asyncio
 from gateway.platforms._shared import extra_or_secret
 from .config import Options, read_secret
 from .transport import Transport, ProtocolError
+from .protocol import room_records, delivery_receipt
 
 
 async def standalone_sender(
@@ -27,7 +28,7 @@ async def standalone_sender(
         await transport.connect()
         if "rooms" in transport.capabilities:
             joined = await transport.call("room_list", {"filter": "joined"})
-            rooms = {r["room_id"]: r for r in joined.get("joined", [])}
+            rooms = {r["room_id"]: r for r in room_records(joined.get("joined"))}
             if room not in rooms or (
                 thread_id and chat_id and rooms[room].get("parent_room_id") != chat_id
             ):
@@ -37,8 +38,7 @@ async def standalone_sender(
         result = await transport.call(
             "message", {"room_id": room, "body": {"text": message, "format": "markdown"}}
         )
-        if not result.get("message_id"):
-            raise ProtocolError("Apron did not confirm delivery")
+        delivery_receipt(result)
         return {"success": True, "message_id": result["message_id"]}
     except ValueError, OSError, ProtocolError:
         return {"error": "Apron standalone delivery failed or destination denied"}

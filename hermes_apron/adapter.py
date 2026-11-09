@@ -8,6 +8,15 @@ import random
 from .config import Options, read_secret
 from .transport import Transport, ProtocolError, RPCError
 from .state import State, CredentialLease
+from .protocol import (
+    InvalidFrame,
+    record,
+    room_records,
+    message_record,
+    records,
+    position,
+    delivery_receipt,
+)
 from .media import Append, put, read_artifact, single
 from gateway.platforms.event import MessageEvent, MessageType
 from gateway.config import Platform
@@ -99,19 +108,14 @@ class ApronAdapter(BasePlatformAdapter):
             )
             return
         rooms = await self.transport.call("room_list", {"filter": "joined"})
-        self.joined = {
-            r["room_id"]: r
-            for r in rooms.get("joined", [])
-            if r.get("room_id") in self.options.rooms
-        }
+        joined = room_records(rooms.get("joined"), history="history" in self.transport.capabilities)
+        self.joined = {r["room_id"]: r for r in joined if r["room_id"] in self.options.rooms}
 
     async def _recover(self):
         if "history" not in self.transport.capabilities:
             return
-        for room, record in self.joined.items():
-            high = record.get("latest_log_id")
-            if high is None:
-                raise ProtocolError("Apron room has no recovery boundary")
+        for room, room_record in self.joined.items():
+            high = position(room_record.get("latest_log_id"))
             checkpoint = self.state.checkpoint(room)
             if checkpoint is None:
                 # First installation starts at the current boundary; never runs old chat as tools.
@@ -124,14 +128,21 @@ class ApronAdapter(BasePlatformAdapter):
                 page = await self.transport.call(
                     "history", {"room_id": room, "after": str(after), "before": high, "limit": 100}
                 )
-                low = page.get("history_log_id")
-                if low is None or int(low) > after:
+                if page.get("history_log_id") is None:
                     raise ProtocolError("Apron history gap; operator reconciliation required")
-                for message in page.get("messages", []):
+                low = position(page["history_log_id"])
+                if type(page.get("more", False)) is not bool:
+                    raise InvalidFrame("invalid Apron history continuation")
+                messages = records(page.get("messages", []))
+                for message in messages:
+                    message_record(message, history=True)
+                last = int(position(page.get("last_log_id"))) if page.get("more") else None
+                if int(low) > after:
+                    raise ProtocolError("Apron history gap; operator reconciliation required")
+                for message in messages:
                     await self._inbound(message)
                 if not page.get("more"):
                     break
-                last = int(page["last_log_id"])
                 if last < after:
                     raise ProtocolError("Apron history failed to advance")
                 after = last + 1
@@ -151,6 +162,11 @@ class ApronAdapter(BasePlatformAdapter):
                     await stream.abort()
                 self.streams.clear()
                 failure = self.transport.failure
+                if isinstance(failure, InvalidFrame):
+                    self._set_fatal_error(
+                        "invalid_protocol", "Apron sent invalid protocol data", retryable=False
+                    )
+                    break
                 if isinstance(failure, RPCError) and failure.code == -32001:
                     break
                 await self.transport.close()
@@ -177,16 +193,24 @@ class ApronAdapter(BasePlatformAdapter):
                         )
                         await transport.connect()
                         self.transport = transport
+                        if transport.you["user_id"] != self.bot_id:
+                            raise InvalidFrame("Apron machine identity changed")
                         await self._rooms()
                         await self._recover()
                         self._mark_connected()
                         break
+                    except InvalidFrame:
+                        self._set_fatal_error(
+                            "invalid_protocol", "Apron sent invalid protocol data", retryable=False
+                        )
+                        return
                     except RPCError as error:
                         failure = error
                         if error.code == -32001:
                             failures = 6
                     except ProtocolError, ValueError, OSError:
                         failure = ProtocolError("Apron reconnect failed")
+                    await self.transport.close()
                 else:
                     break
         except asyncio.CancelledError:
@@ -204,37 +228,41 @@ class ApronAdapter(BasePlatformAdapter):
                 except TimeoutError:
                     continue
                 if frame.get("method") == "room_update":
-                    for room in frame.get("params", {}).get("left", []):
-                        self.joined.pop(room.get("room_id"), None)
-                    for room in frame.get("params", {}).get("joined", []):
-                        if room.get("room_id") in self.options.rooms:
+                    params = record(frame.get("params", {}))
+                    left = room_records(params.get("left", []))
+                    joined = room_records(
+                        params.get("joined", []), history="history" in self.transport.capabilities
+                    )
+                    for room in left:
+                        self.joined.pop(room["room_id"], None)
+                    for room in joined:
+                        if room["room_id"] in self.options.rooms:
                             self.joined[room["room_id"]] = room
                 elif frame.get("method") == "message":
                     await self._inbound(frame.get("params", {}))
         except asyncio.CancelledError:
             raise
-        except ProtocolError, ValueError, TypeError:
+        except ProtocolError as exc:
+            self.transport.failure = exc
             await self.transport.close()
         finally:
             self._mark_disconnected()
 
     async def _inbound(self, message):
-        if not isinstance(message, dict) or message.get("room_id") not in self.joined:
+        message = message_record(message)
+        if (
+            message.get("room_id") not in self.joined
+            or "log_id" not in message
+            or "message_id" not in message
+        ):
             return
         room = message["room_id"]
-        position = message.get("log_id", "")
-        if (
-            not isinstance(position, str)
-            or not position.isascii()
-            or not position.isdigit()
-            or len(position) > 19
-        ):
-            raise ProtocolError("Apron invalid log position")
+        log_position = position(message.get("log_id"))
         checkpoint = self.state.checkpoint(room)
-        if checkpoint is not None and int(position) <= int(checkpoint):
+        if checkpoint is not None and int(log_position) <= int(checkpoint):
             return
         if not self.accepts(message):
-            self.state.advance(room, position)
+            self.state.advance(room, log_position)
             return
         message_id = message["message_id"]
         if not self.state.reserve(room, message_id):
@@ -262,7 +290,7 @@ class ApronAdapter(BasePlatformAdapter):
             reply_to_message_id=(message.get("reply_to") or {}).get("message_id"),
         )
         await self.handle_message(event)
-        self.state.advance(room, position)
+        self.state.advance(room, log_position)
 
     async def disconnect(self):
         if self.worker:
@@ -325,9 +353,8 @@ class ApronAdapter(BasePlatformAdapter):
             if reply_to:
                 params["reply_to"] = {"message_id": str(reply_to)}
             result = await self.transport.call("message", params)
-            message_id = result.get("message_id")
-            if not isinstance(message_id, str) or not message_id:
-                raise ProtocolError("Apron did not confirm message delivery")
+            delivery_receipt(result, writer=native)
+            message_id = result["message_id"]
             if len(self.outbound_rooms) >= 2048:
                 self.outbound_rooms.pop(next(iter(self.outbound_rooms)))
             self.outbound_rooms[message_id] = room
@@ -402,6 +429,7 @@ class ApronAdapter(BasePlatformAdapter):
                     },
                 },
             )
+            delivery_receipt(result, writer=True)
             capability = result["embeds"][0]["write_url"]
             await put(
                 self.options.url, capability, single(data), "application/octet-stream", 8 * 1048576
@@ -484,6 +512,7 @@ class ApronAdapter(BasePlatformAdapter):
                     "body": {"embeds": [{"kind": "terminal", "title": "Reviewed summary"}]},
                 },
             )
+            delivery_receipt(result, writer=True)
             await put(self.options.url, result["embeds"][0]["write_url"], single(summary.encode()))
             return SendResult(success=True, message_id=result["message_id"])
         except ProtocolError, ValueError:

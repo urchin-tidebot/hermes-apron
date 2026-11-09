@@ -217,3 +217,18 @@ These are Python package artifacts, not a complete audited deployment release.
     shared visibility checks on thread announcements and room/membership deliveries, plus
     suppressing left records for children outside machine scope:
     `tools/go test -race ./internal/server -run '^TestMachine' -count=1` PASS.
+35. Independently reviewed MEDIUM untrusted protocol shape/lifecycle failures:
+    `tools/test tests/test_peer_security.py -k 'not rotation' -q --tb=short` (pinned Nix shell)
+    RED: 29 failed / 1 passed / 1 deselected. Missing/empty/scalar bot IDs were accepted;
+    malformed room-list/history entries raised AttributeError/TypeError or were accepted;
+    malformed room updates crashed a supervisor or left it running. GREEN shared shape/type
+    validators reject these before indexing, membership lookup or durable checkpoint writes.
+    Malformed protocol stops cleanly with bounded fixed `invalid_protocol` status; ordinary
+    disconnects retain bounded retry. Actual Hermes status APIs are used; no remote error text
+    or credential is copied to errors. Reconnect pins the authenticated bot ID as well.
+    Expanded synthetic-peer suite PASS: 80 cases, covering auth, greeting/RPC shapes, room
+    lists/updates, history/boundaries, live messages, media receipts, standalone failures,
+    forced reconnect failures, and real second-process credential rotation. Corrected peers
+    can reconnect using the released state/credential locks. Captured old/new transports have
+    no tasks, pending RPCs or sockets after failed reconnect. Focused peer/transport/adapter
+    suite before the last 13 peer cases: PASS, 91 tests; authoritative final totals follow.
