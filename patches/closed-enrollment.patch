@@ -1,0 +1,520 @@
+diff --git a/apron/allowlist.go b/apron/allowlist.go
+index 274b0be..0e593ca 100644
+--- a/apron/allowlist.go
++++ b/apron/allowlist.go
+@@ -212,6 +212,9 @@ func (s *Server) guestsAllowedLocked() bool {
+ // sign-in is restricted, and then when the list names it. An extension's
+ // bot always may; a guest never may on a restricted server.
+ func (s *Server) admittedLocked(u *userState) bool {
++	if s.enrollment != nil && u.botOf != "" {
++		return s.enrollment.machineAllowedLocked(u.id)
++	}
+ 	switch {
+ 	case s.allowlist == nil, u.botOf != "":
+ 		return true
+diff --git a/apron/auth.go b/apron/auth.go
+index 7167e84..3b325d3 100644
+--- a/apron/auth.go
++++ b/apron/auth.go
+@@ -169,7 +169,7 @@ func (s *Server) restoreSchemesLocked() error {
+ // applied under it.
+ func (s *Server) authenticate(c *client, req request) (any, *Error) {
+ 	s.mu.Lock()
+-	if c.closing.Load() {
++	if c.closing.Load() || s.storeFailed {
+ 		s.unlock()
+ 		return nil, connectionClosing()
+ 	}
+@@ -222,6 +222,29 @@ func (s *Server) authenticate(c *client, req request) (any, *Error) {
+ 		return nil, err
+ 	}
+ 	r := s.authRequestLocked(c, req, scheme, requestedName, requested)
++	if s.enrollment != nil && name == passkey.Name && c.user == nil {
++		action, _ := parseString(req.params, "action", false)
++		step, _ := parseString(req.params, "step", false)
++		if step == "begin" {
++			c.enrollmentVerifier = ""
++		}
++		if action == "register" {
++			if step == "begin" {
++				token, _ := parseString(req.params, "invitation", false)
++				verifier := invitationHash(token)
++				if !s.enrollment.validLocked(verifier) {
++					s.unlock()
++					return nil, notAdmitted()
++				}
++				c.enrollmentVerifier = verifier
++			}
++			if !s.enrollment.validLocked(c.enrollmentVerifier) {
++				s.unlock()
++				return nil, notAdmitted()
++			}
++			r.Enrollment = true
++		}
++	}
+ 	s.unlock()
+ 
+ 	result, schemeErr := scheme.Auth(s.requestContext(c), r)
+@@ -234,7 +257,7 @@ func (s *Server) authenticate(c *client, req request) (any, *Error) {
+ 	}
+ 	s.mu.Lock()
+ 	defer s.unlock()
+-	if c.closing.Load() {
++	if c.closing.Load() || s.storeFailed {
+ 		return nil, connectionClosing()
+ 	}
+ 	switch result := result.(type) {
+@@ -407,7 +430,7 @@ func (s *Server) signInProvenLocked(c *client, req request, scheme authn.Scheme,
+ 		switch {
+ 		case !create:
+ 			return nil, &Error{Code: CodeDenied, Message: "This " + scheme.Label() + " belongs to no account"}
+-		case !s.admitsNewLocked(id):
++		case !s.admitsNewLocked(id) && !(s.enrollment != nil && id.Scheme == passkey.Name && s.enrollment.validLocked(c.enrollmentVerifier)):
+ 			return nil, notAdmitted()
+ 		}
+ 		record, err := commit(proof)
+@@ -419,6 +442,12 @@ func (s *Server) signInProvenLocked(c *client, req request, scheme authn.Scheme,
+ 		s.setIdentityLocked(user, id, record)
+ 		s.setGrantLocked(user, id.Scheme, proof.Roles)
+ 		s.grantRolesLocked(user)
++		if s.enrollment != nil {
++			if err := s.enrollment.consumeLocked(c.enrollmentVerifier, user); err != nil {
++				return nil, internalError()
++			}
++			c.enrollmentVerifier = ""
++		}
+ 		// A new account joins the default room, as a new guest does,
+ 		// after the result (§3.2.2).
+ 		return s.signInLocked(c, req, user, now, true, true)
+@@ -703,7 +732,7 @@ func (sc *schemeConn) ProposePage(spec authn.PageProposal) (string, error) {
+ // takes one of the connection's proposals (proposalsPerConnection).
+ func (sc *schemeConn) proposeLocked(state, returnURL string) (*proposal, *authn.Error) {
+ 	s, c := sc.s, sc.c
+-	if c.closing.Load() {
++	if c.closing.Load() || s.storeFailed {
+ 		return nil, authn.Denied("This connection is closing")
+ 	}
+ 	if c.proposalBudget == nil {
+diff --git a/apron/closed.go b/apron/closed.go
+new file mode 100644
+index 0000000..5b504e0
+--- /dev/null
++++ b/apron/closed.go
+@@ -0,0 +1,196 @@
++package apron
++
++import (
++	"crypto/rand"
++	"crypto/sha256"
++	"encoding/base64"
++	"encoding/hex"
++	"encoding/json/jsontext"
++	"encoding/json/v2"
++	"errors"
++	"time"
++)
++
++// Enrollment is an isolated hermes-apron patch API. It owns a restrictive
++// immutable-ID allowlist and stores policy alongside upstream accounts, in the
++// SAME store batch. No policy callbacks execute inside the authentication lock.
++type Enrollment struct {
++	host  *Host
++	list  *Allowlist
++	state enrollmentState
++}
++type enrollmentState struct {
++	Invitations map[string]enrollmentInvite  `json:"invitations"`
++	Machines    map[string]machineCredential `json:"machines"`
++	Accounts    map[string]bool              `json:"accounts"` // bool is explicit owner role
++}
++type machineCredential struct {
++	UserID  string    `json:"user_id"`
++	Expires time.Time `json:"expires"`
++	Revoked bool      `json:"revoked"`
++}
++type enrollmentInvite struct {
++	Expires time.Time `json:"expires"`
++	Owner   bool      `json:"owner"`
++	Used    bool      `json:"used"`
++}
++
++func (r *Registrar) ClosedEnrollment() (*Enrollment, error) {
++	e := &Enrollment{host: r.Host, list: r.RestrictSignIn()}
++	_, err := r.Store().Get("policy", &e.state)
++	if err != nil {
++		return nil, errors.New("closed enrollment policy is corrupt")
++	}
++	if e.state.Invitations == nil {
++		e.state.Invitations = make(map[string]enrollmentInvite)
++	}
++	if e.state.Accounts == nil {
++		e.state.Accounts = make(map[string]bool)
++	}
++	for id := range e.state.Accounts {
++		if err = e.list.Allow(UserID(id)); err != nil {
++			return nil, err
++		}
++	}
++	if e.state.Machines == nil {
++		e.state.Machines = make(map[string]machineCredential)
++	}
++	r.s.enrollment = e
++	return e, nil
++}
++func invitationHash(token string) string {
++	h := sha256.Sum256([]byte(token))
++	return hex.EncodeToString(h[:])
++}
++
++// Issue returns plaintext only to the local caller. The policy stores a verifier.
++// TTL is positive and at most 15 minutes. Outstanding and spent records are bounded.
++func (e *Enrollment) Issue(ttl time.Duration, owner bool) (string, error) {
++	s := e.host.s
++	s.mu.Lock()
++	defer s.unlock()
++	if ttl <= 0 || ttl > 15*time.Minute || s.storeFailed {
++		return "", errors.New("invitation unavailable")
++	}
++	now := time.Now()
++	for k, v := range e.state.Invitations {
++		if !now.Before(v.Expires) {
++			delete(e.state.Invitations, k)
++		}
++	}
++	if len(e.state.Invitations) >= 256 {
++		return "", errors.New("invitation limit reached")
++	}
++	var secret [32]byte
++	if _, err := rand.Read(secret[:]); err != nil {
++		return "", err
++	}
++	token := base64.RawURLEncoding.EncodeToString(secret[:])
++	e.state.Invitations[invitationHash(token)] = enrollmentInvite{Expires: now.Add(ttl), Owner: owner}
++	if err := e.persistLocked(); err != nil {
++		return "", err
++	}
++	return token, nil
++}
++func (e *Enrollment) persistLocked() error {
++	s := e.host.s
++	kind := "ext/" + e.host.name
++	raw, err := json.Marshal(e.state)
++	if err != nil {
++		return errors.New("policy serialization failed")
++	}
++	if s.extData[kind] == nil {
++		s.extData[kind] = make(map[string]jsontext.Value)
++	}
++	s.extData[kind]["policy"] = raw
++	s.dirty.ext[extKey{kind, "policy"}] = true
++	s.flushLocked()
++	if s.storeFailed {
++		return errors.New("persistence failed; restart required")
++	}
++	return nil
++}
++
++func (e *Enrollment) validLocked(hash string) bool {
++	i, ok := e.state.Invitations[hash]
++	return ok && !i.Used && time.Now().Before(i.Expires) && !e.host.s.storeFailed
++}
++func (e *Enrollment) consumeLocked(hash string, u *userState) error {
++	if !e.validLocked(hash) {
++		return errors.New("invitation unavailable")
++	}
++	s := e.host.s
++	i := e.state.Invitations[hash]
++	i.Used = true
++	e.state.Invitations[hash] = i
++	e.state.Accounts[u.id] = i.Owner
++	s.allowlist.principals[UserID(u.id)] = true
++	if i.Owner {
++		s.setGrantLocked(u, "closed", []string{RoleAdmin})
++		s.grantRolesLocked(u)
++	}
++	return e.persistLocked()
++}
++
++// RevokeInvitation revokes by verifier (the CLI need not read the plaintext).
++func (e *Enrollment) RevokeInvitation(verifier string) error {
++	s := e.host.s
++	s.mu.Lock()
++	defer s.unlock()
++	delete(e.state.Invitations, verifier)
++	return e.persistLocked()
++}
++
++// RevokeAccount removes an immutable ID and all its active bearer/device sessions.
++func (e *Enrollment) RevokeAccount(id string) error {
++	s := e.host.s
++	s.mu.Lock()
++	defer s.unlock()
++	delete(e.state.Accounts, id)
++	for hash, m := range e.state.Machines {
++		if m.UserID == id {
++			m.Revoked = true
++			e.state.Machines[hash] = m
++		}
++	}
++	delete(s.allowlist.principals, UserID(id))
++	if u := s.users[id]; u != nil {
++		s.signOutLocked(u)
++	}
++	return e.persistLocked()
++}
++
++// BindMachine binds a runtime-only credential to an extension-owned bot.
++func (e *Enrollment) BindMachine(id, token string, ttl time.Duration) error {
++	s := e.host.s
++	s.mu.Lock()
++	defer s.unlock()
++	u := s.users[id]
++	if u == nil || u.botOf != e.host.name || len(token) < 43 || ttl <= 0 || ttl > 7*24*time.Hour {
++		return errors.New("invalid machine binding")
++	}
++	hash := invitationHash(token)
++	if m, ok := e.state.Machines[hash]; ok {
++		if m.UserID != id {
++			return errors.New("invalid machine binding")
++		}
++		return nil
++	}
++	for key, m := range e.state.Machines {
++		if m.UserID == id {
++			delete(e.state.Machines, key)
++		}
++	}
++	s.signOutLocked(u)
++	e.state.Machines[hash] = machineCredential{UserID: id, Expires: time.Now().Add(ttl)}
++	return e.persistLocked()
++}
++
++func (e *Enrollment) machineAllowedLocked(id string) bool {
++	for _, m := range e.state.Machines {
++		if m.UserID == id && !m.Revoked && time.Now().Before(m.Expires) {
++			return true
++		}
++	}
++	return false
++}
+diff --git a/apron/devices.go b/apron/devices.go
+index ecd1df1..4227558 100644
+--- a/apron/devices.go
++++ b/apron/devices.go
+@@ -77,6 +77,9 @@ func (s *Server) devicesOfLocked(u *userState) ([][32]byte, []deviceToken) {
+ // this connection only, in a ~private notice before the result (§1).
+ func (s *Server) inviteDeviceCommand(c *client, r *roomState, _ map[string]any, args, _ string) (map[string]any, *Error) {
+ 	u := c.user
++	if s.enrollment != nil {
++		return nil, &Error{Code: CodeUnsupported, Message: "Device tokens disabled; use verified passkeys"}
++	}
+ 	if !u.account() {
+ 		return nil, &Error{Code: CodeDenied, Message: "Sign in with an account to use /invite-device"}
+ 	}
+diff --git a/apron/persist.go b/apron/persist.go
+index 6838bc8..37d7f24 100644
+--- a/apron/persist.go
++++ b/apron/persist.go
+@@ -267,7 +267,7 @@ func sessionID(key [32]byte) string { return hex.EncodeToString(key[:]) }
+ 
+ // flushLocked queues the marked changes as one batch for the store writer.
+ func (s *Server) flushLocked() {
+-	if s.storeClosed {
++	if s.storeClosed || s.storeFailed {
+ 		s.dirty = newDirtySet()
+ 		return
+ 	}
+@@ -279,7 +279,15 @@ func (s *Server) flushLocked() {
+ 	}
+ 	s.dirty = newDirtySet()
+ 	if len(batch) > 0 {
+-		s.storeWrites <- batch
++		// Closed enrollment requires durable commits before authorization replies.
++		// Serialize store writes under mu; the legacy worker stays idle.
++		if err := s.config.Store.Apply(batch); err != nil {
++			s.storeFailed = true
++			s.logger.Error("persistence failed; restart required")
++			for c := range s.clients {
++				c.closeWithError(internalError())
++			}
++		}
+ 	}
+ }
+ 
+diff --git a/apron/server.go b/apron/server.go
+index 9a507d0..14dc195 100644
+--- a/apron/server.go
++++ b/apron/server.go
+@@ -439,8 +439,9 @@ func (t wsTransport) ping(ctx context.Context) error { return t.ws.Ping(ctx) }
+ func (t wsTransport) close() { _ = t.ws.CloseNow() }
+ 
+ type client struct {
+-	server *Server
+-	conn   transport
++	enrollmentVerifier string
++	server             *Server
++	conn               transport
+ 	// request is the context of the request being processed, which the
+ 	// extension code it runs gets: canceled when the connection closes. It
+ 	// is set by whoever processes the connection's frames, one at a time.
+@@ -555,6 +556,8 @@ type Server struct {
+ 	storeWrites chan []store.Entry
+ 	storeDone   chan struct{}
+ 	storeClosed bool
++	storeFailed bool
++	enrollment  *Enrollment
+ 	storedMeta  storedMeta
+ 	pushes      map[string]*pushRegistration
+ 	closed      bool
+@@ -752,6 +755,10 @@ func Open(config Config) (*Server, error) {
+ 		_ = s.Shutdown(ctx)
+ 		return nil, err
+ 	}
++	if s.storeFailed {
++		_ = s.Shutdown(context.Background())
++		return nil, errors.New("persistence failed")
++	}
+ 	return s, nil
+ }
+ 
+@@ -1366,7 +1373,7 @@ func (s *Server) processFrame(c *client, payload []byte) {
+ 	s.mu.Lock()
+ 	// A connection being closed, as when its account is signed out, does
+ 	// nothing more: the frames it sent before are dropped.
+-	if c.closing.Load() {
++	if c.closing.Load() || s.storeFailed {
+ 		s.unlock()
+ 		return
+ 	}
+diff --git a/apron/sessions.go b/apron/sessions.go
+index 1607547..2fdf811 100644
+--- a/apron/sessions.go
++++ b/apron/sessions.go
+@@ -45,6 +45,10 @@ func (s *Server) signInLocked(c *client, req request, user *userState, now time.
+ 	s.sessions[c.token] = session{user: user, origin: c.origin, expires: now.Add(sessionLifetime)}
+ 	s.touchSession(c.token)
+ 	s.capSessionsLocked(user, c.token)
++	s.flushLocked()
++	if s.storeFailed {
++		return nil, internalError()
++	}
+ 	return s.switchUserLocked(c, req, user, map[string]any{"token": token}, signIn, joinDefault), nil
+ }
+ 
+@@ -102,6 +106,7 @@ func (s *Server) authenticateToken(c *client, req request) (any, *Error) {
+ 	// Any token auth ends the schemes' pending work on the connection, such
+ 	// as a passkey ceremony, whether or not it signs in.
+ 	c.authStates = nil
++	c.enrollmentVerifier = ""
+ 	now := time.Now()
+ 	token, err := parseString(req.params, "token", true)
+ 	if err != nil {
+@@ -115,6 +120,18 @@ func (s *Server) authenticateToken(c *client, req request) (any, *Error) {
+ 	}
+ 	s.pruneSessionsLocked(now)
+ 	key := sha256.Sum256([]byte(token))
++	if s.enrollment != nil {
++		if machine, ok := s.enrollment.state.Machines[invitationHash(token)]; ok {
++			if machine.Revoked || !now.Before(machine.Expires) {
++				return nil, notAdmitted()
++			}
++			u := s.users[machine.UserID]
++			if u == nil || u.botOf == "" {
++				return nil, notAdmitted()
++			}
++			return s.switchUserLocked(c, req, u, nil, c.user != u, false), nil
++		}
++	}
+ 	session, ok := s.sessions[key]
+ 	if !ok || session.origin != c.origin || !now.Before(session.expires) {
+ 		// A temporary token approves its proposal with this scheme too, as
+@@ -136,7 +153,7 @@ func (s *Server) authenticateToken(c *client, req request) (any, *Error) {
+ 	if err := s.admitLocked(session.user); err != nil {
+ 		return nil, err
+ 	}
+-	session.expires = now.Add(sessionLifetime)
++	// Preserve the absolute session expiry on resume.
+ 	s.sessions[key] = session
+ 	s.touchSession(key)
+ 	c.token = key
+diff --git a/internal/auth/passkey/passkey.go b/internal/auth/passkey/passkey.go
+index d7355f3..9d74a05 100644
+--- a/internal/auth/passkey/passkey.go
++++ b/internal/auth/passkey/passkey.go
+@@ -117,10 +117,11 @@ type ceremony struct {
+ 	action      string
+ 	// userID and handle are the account a registration adds to, and the
+ 	// handle its passkey gets: the account's own, or a new one.
+-	userID string
+-	handle []byte
+-	rpID   string
+-	origin string
++	userID     string
++	enrollment bool
++	handle     []byte
++	rpID       string
++	origin     string
+ 	// name is the display name a guest's registration asked for, applied
+ 	// when it finishes; empty for a login, or a passkey added to an
+ 	// account.
+@@ -180,7 +181,11 @@ func (s *Scheme) begin(r *authn.Request, action string) (authn.Result, error) {
+ 	if action == "register" {
+ 		account := r.Account
+ 		if account == nil {
+-			return nil, authn.Denied("Sign in as a guest before adding a passkey")
++			if !r.Enrollment {
++				return nil, authn.Denied("Sign in as a guest before adding a passkey")
++			}
++			c.enrollment = true
++			account = &authn.Account{Name: r.Name, Guest: true}
+ 		}
+ 		c.userID = account.UserID
+ 		h := &holder{name: account.Name}
+@@ -273,6 +278,12 @@ func (s *Scheme) finish(r *authn.Request, action string) (authn.Result, error) {
+ // connection's account; Commit adds it to the account's holder.
+ func (s *Scheme) finishRegistration(r *authn.Request, c *ceremony) (authn.Result, error) {
+ 	account := r.Account
++	if c.enrollment {
++		if !r.Enrollment || account != nil {
++			return nil, authn.Denied("Identity changed; try again")
++		}
++		account = &authn.Account{Name: c.name, Guest: true}
++	}
+ 	subject := ""
+ 	if account != nil {
+ 		subject = account.Identities[Name]
+@@ -296,7 +307,7 @@ func (s *Scheme) finishRegistration(r *authn.Request, c *ceremony) (authn.Result
+ 	if createErr != nil || credential == nil {
+ 		return nil, authn.Denied("Passkey verification failed")
+ 	}
+-	return &authn.Add{Session: true, Proof: authn.Proof{
++	proof := authn.Proof{
+ 		Subject: Subject(c.handle), Name: c.name,
+ 		Commit: func() (jsontext.Value, error) {
+ 			s.mu.Lock()
+@@ -316,7 +327,11 @@ func (s *Scheme) finishRegistration(r *authn.Request, c *ceremony) (authn.Result
+ 			s.byCredential[string(credential.ID)] = h
+ 			return json.Marshal(h)
+ 		},
+-	}}, nil
++	}
++	if c.enrollment {
++		return &authn.SignIn{Create: true, Proof: proof}, nil
++	}
++	return &authn.Add{Session: true, Proof: proof}, nil
+ }
+ 
+ // finishLogin verifies a passkey, which signs in to its account; Commit
+diff --git a/internal/authn/authn.go b/internal/authn/authn.go
+index a099f56..b23e265 100644
+--- a/internal/authn/authn.go
++++ b/internal/authn/authn.go
+@@ -92,6 +92,8 @@ type Router interface {
+ 
+ // Request is one auth request, as a scheme sees it.
+ type Request struct {
++	// Enrollment permits an invitation-bound registration without a guest account.
++	Enrollment bool
+ 	// Params are the request's params: a copy.
+ 	Params map[string]jsontext.Value
+ 	// Name and UserID are what the request asks for a new account, as the
