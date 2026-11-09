@@ -398,21 +398,6 @@ index ecd1df1..4227558 100644
  	if !u.account() {
  		return nil, &Error{Code: CodeDenied, Message: "Sign in with an account to use /invite-device"}
  	}
-diff --git a/apron/editors_test.go b/apron/editors_test.go
-index 8a38a46..b1928e7 100644
---- a/apron/editors_test.go
-+++ b/apron/editors_test.go
-@@ -3,9 +3,9 @@ package apron
- import (
- 	"context"
- 	"fmt"
-+	"reflect"
- 	"strings"
- 	"sync"
--	"reflect"
- 	"testing"
- )
- 
 diff --git a/apron/messages.go b/apron/messages.go
 index 36acbd1..d478de3 100644
 --- a/apron/messages.go
@@ -730,6 +715,33 @@ index a099f56..b23e265 100644
  	// Params are the request's params: a copy.
  	Params map[string]jsontext.Value
  	// Name and UserID are what the request asks for a new account, as the
+diff --git a/store/durability_test.go b/store/durability_test.go
+new file mode 100644
+index 0000000..8e48d86
+--- /dev/null
++++ b/store/durability_test.go
+@@ -0,0 +1,21 @@
++package store
++
++import (
++	"path/filepath"
++	"testing"
++)
++
++func TestClosedWrapperRequiresDurableSQLiteCommits(t *testing.T) {
++	s, err := OpenSQLite(filepath.Join(t.TempDir(), "state.db"))
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer s.Close()
++	var policy int
++	if err = s.db.QueryRow("PRAGMA synchronous").Scan(&policy); err != nil {
++		t.Fatal(err)
++	}
++	if policy != 2 {
++		t.Fatalf("SQLite synchronous policy = %d; want FULL (2)", policy)
++	}
++}
 diff --git a/store/sqlite.go b/store/sqlite.go
 index a1f118f..335f777 100644
 --- a/store/sqlite.go
