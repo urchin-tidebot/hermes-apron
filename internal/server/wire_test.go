@@ -349,7 +349,22 @@ func TestMachineMustBeJoinedToPost(t *testing.T) {
 	defer h.Close()
 	w := dial(t, h.URL)
 	result(t, w.call(t, "auth", map[string]any{"scheme": "token", "token": e.machine}))
-	room := result(t, w.call(t, "room_set", map[string]any{"title": "Fixture room"}))["room_id"]
+	room := "general"
+	pending := result(t, w.call(t, "command", map[string]any{"room_id": room, "body": map[string]any{"text": "/embed-append delayed"}}))
+	capability := pending["embeds"].([]any)[0].(map[string]any)["write_url"].(string)
 	result(t, w.call(t, "room_leave", map[string]any{"room_id": room}))
+	request, err := http.NewRequest(http.MethodPut, capability, strings.NewReader("must not post after leave"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusGone {
+		t.Fatal("pending media post bypassed machine membership", response.StatusCode)
+	}
+	denied(t, w.call(t, "command", map[string]any{"room_id": room, "body": map[string]any{"text": "/embed-terminal after leave"}}))
 	denied(t, w.call(t, "message", map[string]any{"room_id": room, "body": map[string]any{"text": "not joined"}}))
 }

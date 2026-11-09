@@ -9,12 +9,11 @@ import time
 import uuid
 from urllib.parse import urlsplit
 import ipaddress
+import math
+
+from .protocol import ProtocolError, InvalidFrame, record, identifier, string_list
 
 import websockets
-
-
-class ProtocolError(Exception):
-    pass
 
 
 class RPCError(ProtocolError):
@@ -86,16 +85,17 @@ class Transport:
             )
             async with asyncio.timeout(self.timeout):
                 frame = self._decode(await self.ws.recv())
-            if frame.get("method") != "server" or frame.get("params", {}).get("apron") != 10:
-                raise ProtocolError("unsupported Apron greeting")
-            self._greeting(frame["params"])
+            if frame.get("method") != "server":
+                raise InvalidFrame("unsupported Apron greeting")
+            self._greeting(frame.get("params", {}))
             if "token" not in self.server.get("auth", []):
                 raise ProtocolError("Apron has no token authentication")
             self.tasks.append(asyncio.create_task(self._read()))
             auth = await self.call("auth", {"scheme": "token", "token": self._token})
             self.you = auth.get("you")
             if not isinstance(self.you, dict) or self.you.get("roles") != ["bot"]:
-                raise ProtocolError("runtime credential must identify a non-admin bot")
+                raise InvalidFrame("runtime credential must identify a non-admin bot")
+            identifier(self.you.get("user_id"))
             self.tasks.append(asyncio.create_task(self._heartbeat()))
         except BaseException as exc:
             await self.close()
@@ -111,14 +111,39 @@ class Transport:
             value = json.loads(raw, parse_constant=lambda _: (_ for _ in ()).throw(ValueError()))
             if not isinstance(value, dict):
                 raise ValueError()
+            if "id" in value and not isinstance(value["id"], str):
+                raise ValueError()
+            if "method" in value and (not isinstance(value["method"], str) or not value["method"]):
+                raise ValueError()
+            if "params" in value:
+                record(value["params"])
+            if "error" in value:
+                error = record(value["error"])
+                if type(error.get("code")) is not int or not -(2**31) <= error["code"] < 2**31:
+                    raise ValueError()
+                data = record(error.get("data", {}))
+                retry = data.get("retry_after", 0)
+                if type(retry) not in (int, float) or (
+                    isinstance(retry, float) and not math.isfinite(retry)
+                ):
+                    raise ValueError()
             return value
         except ValueError, TypeError:
-            raise ProtocolError("invalid Apron frame") from None
+            raise InvalidFrame("invalid Apron frame") from None
 
     def _greeting(self, params):
-        caps = params.get("capabilities", [])
-        if not isinstance(caps, list) or not all(isinstance(x, str) for x in caps):
-            raise ProtocolError("invalid Apron capabilities")
+        params = record(params)
+        if type(params.get("apron")) is not int or params["apron"] != 10:
+            raise InvalidFrame("unsupported Apron greeting")
+        caps = string_list(params.get("capabilities", []))
+        string_list(params.get("auth", []))
+        ping = params.get("ping", 30)
+        if (
+            type(ping) not in (int, float)
+            or (isinstance(ping, float) and not math.isfinite(ping))
+            or ping <= 0
+        ):
+            raise InvalidFrame("invalid Apron heartbeat interval")
         self.server = params
         self.capabilities = set(caps)
 
@@ -140,14 +165,14 @@ class Transport:
                         elif isinstance(frame.get("result"), dict):
                             future.set_result(frame["result"])
                         else:
-                            future.set_exception(ProtocolError("invalid Apron RPC reply"))
+                            future.set_exception(InvalidFrame("invalid Apron RPC reply"))
                 elif "error" in frame:
                     error = frame["error"]
                     raise RPCError(error.get("code"), error.get("data", {}).get("retry_after", 0))
                 elif frame.get("method") == "pong":
                     self._pong = time.monotonic()
                 elif frame.get("method") == "server":
-                    self._greeting(frame["params"])
+                    self._greeting(frame.get("params", {}))
                 elif frame.get("method"):
                     try:
                         self.events.put_nowait(frame)
@@ -184,13 +209,19 @@ class Transport:
                 return await future
         except TimeoutError:
             raise ProtocolError("Apron request timed out; delivery may be uncertain") from None
+        except websockets.exceptions.WebSocketException, OSError:
+            raise ProtocolError("Apron connection ended; delivery may be uncertain") from None
         finally:
             self.pending.pop(request_id, None)
 
     async def notify(self, method, params=None):
         if self.closed.is_set() or not self.ws:
             raise ProtocolError("Apron is disconnected")
-        await self.ws.send(json.dumps({"method": method, "params": params or {}}))
+        try:
+            async with asyncio.timeout(self.timeout):
+                await self.ws.send(json.dumps({"method": method, "params": params or {}}))
+        except websockets.exceptions.WebSocketException, OSError, TimeoutError:
+            raise ProtocolError("Apron notification failed") from None
 
     async def _heartbeat(self):
         interval = self.server.get("ping", 30)

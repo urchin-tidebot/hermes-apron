@@ -2,6 +2,38 @@
 
 Implementation evidence, not deployment approval. Network/device/operator gates remain NOT RUN.
 
+## Final remediation validation — 2026-11-09
+
+Authoritative totals for this worktree; counts in the numbered TDD chronology below are historical,
+not current aggregate counts. The requirements and release gates remain unchanged.
+
+| Command (inside pinned `nix develop`, with private scratch `TMPDIR`) | Actual result |
+|---|---|
+| `make check` | PASS after the documented human-delta regression was corrected. Includes wrapper/upstream races, full Python/browser suite, lint, binary build, content audit and dependency audits |
+| `tools/go test -race ./...` | PASS: **19 top-level wrapper Go tests**; command package has no test files. Final rerun includes restored-policy-without-rebind, implicit default target and known message/embed-ID assertions |
+| `tools/test -q` | PASS: **113 Python tests**, including actual pinned Hermes, real Go server, Chromium virtual WebAuthn and pinned frontend browser E2E; no skips reported |
+| `tools/upstream-test` | PASS under race detection: real patched `apron`, `aproncmd`, `store`, with pinned protocol fixtures initialized |
+| `tools/frontend --test` | PASS: **200 files / 1,691 tests**; Svelte 0 errors / 0 warnings; runtime npm audit 0 vulnerabilities; local static build PASS. Five low development-only findings remain |
+| `nix flake check --no-update-lock-file` | PASS on x86_64-linux; aarch64-linux omitted as incompatible, not counted as a pass |
+| `tools/go vet ./...`, gofmt, Ruff check/format | PASS; **24 Python source/test/tool files** formatted |
+| `tools/build` | PASS, binary plus notices for **28 runtime Go modules** and Go standard library in scratch |
+| `tools/go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...` | PASS: no vulnerabilities found with pinned Go 1.27.3 |
+| `python3 tools/dependency_audit.py` | PASS: **40 locked public Python registry packages**, zero OSV findings |
+| `python3 tools/audit.py` and `gitleaks dir/git --redact` (`b899490..HEAD`) | PASS on source/added history; code snapshot `d47a451`: **71 source files / 13 added commits**. Final test/docs working tree and committed history rescanned before handoff; raw logs stay in scratch |
+| `python3 tools/public_run.py uv --no-config build --out-dir <scratch>` | PASS: wheel and sdist. Archive name/content audit PASS: **14 wheel files / 25 sdist files**. uv's separate `.gitignore` helper was inspected and excluded from archive counts |
+
+The final code-validation snapshot is `d47a451`; subsequent changes strengthen wire assertions and
+update evidence/status only. Frontend/build/dependency pins did not change. The public v10 protocol
+was fetched again and its SHA-256 still matches the provenance entry. Test state, generated
+credentials, locks, browser authenticators, logs and artifacts stayed in disposable scratch.
+No production secrets/configuration were read. No deployment, gateway/Telegram/firewall/root/
+Home Manager changes, push, PR, fork, history rewrite or protected instruction edits occurred.
+
+Parent fix review and publication approval, safe affirmative consent, supported credential removal,
+full license/security review, resource/crash/recovery coverage, and real LAN/TLS/device/IPv6 acceptance
+remain release blockers. Green tests do not clear them. Already-issued read capability URLs and
+previously shared bytes remain bearer/copy risks; machine room write targets are now rechecked.
+
 ## TDD ledger
 
 1. Closed admission: `go test ./internal/server -run TestFreshServerClosed -v`
@@ -173,7 +205,7 @@ or raw Codex/test transcripts are committed. The custom audit checks private add
 Archive name/content audits: PASS (13 wheel files, 22 sdist files); no runtime state/credential files.
 These are Python package artifacts, not a complete audited deployment release.
 
-## Final verification (2026-11-09)
+## Original implementation verification (2026-11-09; before independent-review fixes)
 
 `nix develop --command make check`: **PASS (exit 0)** with the final implementation.
 This ran `tools/go test -race ./...` (14 top-level server tests), `tools/test -q`
@@ -214,3 +246,82 @@ disposable loopback fixtures ran; no LAN deployment, active service changes,
 production credential reads, push, PR, fork or release occurred. Manual TLS,
 device/network and backup/restore checks and the other matrix release gates
 remain NOT RUN or BLOCKED.
+## Independent-review regressions and fixes
+
+31. Independently reviewed HIGH machine scope finding (snapshot `272afba`):
+    `tools/go test ./internal/server -run '^TestMachineRoomScope$' -count=1` RED:
+    `room_list` returned an unconfigured public room. An activity notification was initially
+    tested as an RPC and timed out; that fixture error was removed and is not RED evidence.
+    GREEN: `tools/go test -race ./internal/server -run '^TestMachine(RoomScope|MustBeJoinedToPost)$' -count=1`
+    PASS. Exact scope persists with the credential; public/private/unconfigured child rooms,
+    targeted and aggregate history/lists, cross-scope replies, upload posts, joins and creates
+    are denied. Explicit private/thread scope works after SQLite restart and remains restricted
+    on another restart. A human cannot expand bot scope with membership. Hermes fixtures now
+    provision as humans and restart with explicit operator scope; their results follow below.
+    Current public protocol retrieved via curl: v10, updated 2026-10-30 (web tool unavailable
+    for that URL); pinned protocol fixtures remain authoritative for tested compatibility.
+    `nix develop --command tools/test tests/test_adapter.py -k 'two_private or edit_is_bound' -q`:
+    PASS, 2 passed / 17 deselected. Actual pinned Hermes handlers and Chromium passkeys retain
+    two private parent/two child conversation isolation and room-bound edits under explicit scope.
+
+32. Independently reviewed MEDIUM machine active-socket expiry:
+    `tools/go test ./internal/server -run '^TestMachineExpiry' -count=1` RED, both tests:
+    `machine expiry left an authenticated socket alive`. The tests use actual 600/700 ms
+    deadlines and wait on sockets; no timestamps, stored expiries or clocks are fabricated.
+    GREEN: the same two tests under `-race -count=3` PASS. Both sockets close, a message
+    held in a real extension filter plus a pipelined frame cannot commit, fresh auth fails,
+    restart schedules the original deadline and another restart cannot renew an expired token.
+    Added upstream lifecycle regression covers replacement, revocation and shutdown timer cleanup.
+    Patch regeneration initially omitted the pre-existing untracked durability regression and
+    formatted an unrelated test; corrective local commit `e8f9746` restores both without rewriting history.
+    `tools/upstream-test -run 'TestMachineTimerLifecycle|TestClosedWrapperRequiresDurableSQLiteCommits' -count=1`:
+    PASS under race detection for patched apron/store; aproncmd correctly reports no matching tests.
+33. Independently reviewed HIGH reconnect/lease credential rotation:
+    `nix develop --command env TMPDIR=<scratch> tools/test tests/test_peer_security.py -q`
+    RED: the adapter authenticated token B while a real second process already consumed B,
+    holding only A's lease (`adapter authenticated rotated credential without its consumer lease`).
+    Initial child registration used a mismatched Hermes profile scope; that setup failure is not RED.
+    GREEN with a fixed fingerprint/lease match before reconnect: changed file produces the real
+    Hermes nonretryable `credential_changed` status, closes tasks/connections/state/lease, and
+    never authenticates B. The child remains exclusive; controlled restart acquires B after child
+    exit. Focused rotation/reconnect/second-consumer suite PASS: 3 passed / 17 deselected.
+34. Completing independently reviewed machine-scope finding: live thread metadata.
+    `tools/go test ./internal/server -run '^TestMachineRoomScopeLiveMetadata$' -count=1`
+    RED: unconfigured child metadata broadcast to scoped parent member. Upstream announces
+    new/changed public threads to parent members independently of room listing. GREEN after
+    shared visibility checks on thread announcements and room/membership deliveries, plus
+    suppressing left records for children outside machine scope:
+    `tools/go test -race ./internal/server -run '^TestMachine' -count=1` PASS.
+35. Independently reviewed MEDIUM untrusted protocol shape/lifecycle failures:
+    `tools/test tests/test_peer_security.py -k 'not rotation' -q --tb=short` (pinned Nix shell)
+    RED: 29 failed / 1 passed / 1 deselected. Missing/empty/scalar bot IDs were accepted;
+    malformed room-list/history entries raised AttributeError/TypeError or were accepted;
+    malformed room updates crashed a supervisor or left it running. GREEN shared shape/type
+    validators reject these before indexing, membership lookup or durable checkpoint writes.
+    Malformed protocol stops cleanly with bounded fixed `invalid_protocol` status; ordinary
+    disconnects retain bounded retry. Actual Hermes status APIs are used; no remote error text
+    or credential is copied to errors. Reconnect pins the authenticated bot ID as well.
+    Expanded synthetic-peer suite PASS: 80 cases, covering auth, greeting/RPC shapes, room
+    lists/updates, history/boundaries, live messages, media receipts, standalone failures,
+    forced reconnect failures, and real second-process credential rotation. Corrected peers
+    can reconnect using the released state/credential locks. Captured old/new transports have
+    no tasks, pending RPCs or sockets after failed reconnect. Focused peer/transport/adapter
+    suite before the last 13 peer cases: PASS, 91 tests; authoritative final totals follow.
+36. Full upstream race suite caught a compatibility regression in the new candidate filter:
+    `TestRoomListLatestLogIDDeltaPrivateRooms` failed because human private-room removal
+    lost its `left` delta. Narrowed the filter to exact machine policy only, preserving upstream
+    human visibility/membership behavior. Focused upstream race regression PASS.
+    Completing the reviewed media-target path: extended `TestMachineMustBeJoinedToPost` RED
+    allowed a pending `/embed-append` HTTP write to post after machine leave (204). GREEN
+    denies command creation after leave and checks machine room scope/active admission/membership
+    at HTTP write start, upload commit, live chunks and completion. Pending posts also recheck
+    membership. Read capabilities and bytes already shared remain independent bearers.
+    Real HTTP `TestMachineUploadRechecksTargetMembership` covers leave before write start and
+    during body receive (genuine HTTP 100-continue rendezvous), with no read capability published.
+    `tools/go test -race ./internal/server -run '^TestMachine(MustBeJoinedToPost|UploadRechecksTargetMembership|RoomScope)' -count=1`: PASS.
+37. Supplemental scope wire assertions verify policy restoration without any machine rebinding,
+    parent-filtered child listings, known outside message/embed IDs, out-of-scope stream commands,
+    and implicit default targets after removing `general` from explicit scope.
+    Final `tools/go test -race ./...` PASS with all 19 top-level wrapper tests.
+    LOW stale-aggregate finding is corrected by the authoritative final-results table above;
+    historical RED/GREEN counts remain explicitly historical.

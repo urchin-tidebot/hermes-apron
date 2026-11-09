@@ -16,6 +16,9 @@ import (
 type enrolling struct {
 	policy  *apron.Enrollment
 	machine string
+	rooms   []string
+	ttl     time.Duration
+	filter  func(context.Context, *apron.Draft) error
 }
 
 func (*enrolling) Name() string { return "closed" }
@@ -24,8 +27,17 @@ func (e *enrolling) Init(r *apron.Registrar) (err error) {
 	if err == nil && e.machine != "" {
 		_, err = r.Bot("hermes", apron.BotOptions{Name: "Hermes"})
 		if err == nil {
-			err = e.policy.BindMachine("hermes", e.machine, time.Hour)
+			if e.rooms == nil {
+				e.rooms = []string{"general"}
+			}
+			if e.ttl == 0 {
+				e.ttl = time.Hour
+			}
+			err = e.policy.BindMachine("hermes", e.machine, e.ttl, e.rooms)
 		}
+	}
+	if e.filter != nil {
+		r.FilterMessage(e.filter)
 	}
 	return
 }

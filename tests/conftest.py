@@ -26,26 +26,33 @@ def real_server():
             if os.environ.get("HERMES_APRON_FRONTEND_DIR")
             else []
         )
-        proc = subprocess.Popen(
-            [
-                binary,
-                "serve",
-                "--state-dir",
-                str(state),
-                "--listen",
-                "127.0.0.1:0",
-                "--test-loopback",
-                "--machine-file",
-                str(secret),
-                "--rooms",
-                "general",
-            ]
-            + extra_frontend,
-            stdout=subprocess.PIPE,
-            stderr=log,
-            text=True,
-        )
-        try:
+        proc = None
+        runtime = Runtime()
+
+        def restart(rooms=("general",)):
+            nonlocal proc
+            if proc is not None:
+                proc.terminate()
+                proc.wait(timeout=10)
+            proc = subprocess.Popen(
+                [
+                    binary,
+                    "serve",
+                    "--state-dir",
+                    str(state),
+                    "--listen",
+                    "127.0.0.1:0",
+                    "--test-loopback",
+                    "--machine-file",
+                    str(secret),
+                    "--rooms",
+                    ",".join(rooms),
+                ]
+                + extra_frontend,
+                stdout=subprocess.PIPE,
+                stderr=log,
+                text=True,
+            )
             # stdout is a single readiness JSON frame, never a credential.
             import select
 
@@ -54,7 +61,7 @@ def real_server():
             line = proc.stdout.readline()
             assert line, "server failed to start; inspect disposable log before fixture cleanup"
             url = json.loads(line)["url"]
-            yield Runtime(
+            runtime.update(
                 {
                     "url": url,
                     "ws": url.replace("http:", "ws:") + "/ws",
@@ -64,8 +71,13 @@ def real_server():
                     "binary": binary,
                     "root": root,
                     "log": log,
+                    "restart": restart,
                 }
             )
+
+        try:
+            restart()
+            yield runtime
         finally:
             proc.terminate()
             try:

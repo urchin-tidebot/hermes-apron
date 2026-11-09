@@ -476,12 +476,15 @@ async def test_two_private_rooms_and_child_threads_stay_isolated(real_server, tm
                 "room_set", {"title": f"Private fixture {index}", "private": True}
             )
             parent_id = parent["room_id"]
-            await human.call("room_join", {"room_id": parent_id, "user_id": "hermes"})
             child = await human.call(
                 "room_set", {"parent_room_id": parent_id, "title": "Fixture thread"}
             )
-            await human.call("room_join", {"room_id": child["room_id"], "user_id": "hermes"})
             room_ids.extend([parent_id, child["room_id"]])
+        credentials = human.credentials
+        await human.ws.close()
+        await asyncio.to_thread(real_server["restart"], ["general", *room_ids])
+        human, restored_identity = await enrolled_human(real_server, credentials)
+        assert restored_identity == identity
         adapter = ApronAdapter(
             SimpleNamespace(
                 extra={
@@ -605,13 +608,13 @@ def test_profile_scoped_configuration_is_passive_and_cannot_borrow_secret(tmp_pa
 
 
 async def test_edit_is_bound_to_original_room(real_server, tmp_path):
-    from hermes_apron.transport import Transport
+    import asyncio
+    from humans import enrolled_human
 
-    provision = Transport(
-        real_server["ws"], real_server["url"], real_server["token"], test_loopback=True
-    )
-    await provision.connect()
+    provision, _ = await enrolled_human(real_server)
     room = (await provision.call("room_set", {"title": "Second fixture room"}))["room_id"]
+    await provision.ws.close()
+    await asyncio.to_thread(real_server["restart"], ["general", room])
     adapter = ApronAdapter(
         SimpleNamespace(
             extra={
@@ -633,4 +636,4 @@ async def test_edit_is_bound_to_original_room(real_server, tmp_path):
         ).success, "edit moved a message across conversation scopes"
     finally:
         await adapter.disconnect()
-        await provision.close()
+        await provision.ws.close()

@@ -17,7 +17,7 @@ The server and operator OS user are trusted; remote clients, account/display nam
 
 ## Capability URL treatment
 
-Upstream upload/read/live/write URLs are bearer capabilities. Read URLs need no authenticated socket and can outlive account revocation. Revoking an account cannot retract bytes already copied, read URLs already shared, or an HTTP stream that is already open. Writer capabilities also have their upstream lifetime independent of WS auth. Push is disabled, and the plugin aborts its own live writers when a connection fails. An operator handling a disclosure must remove the affected message/upload and assess copies; do not promise token revocation erases attachments. A stricter per-account HTTP-capability policy is not implemented.
+Upstream upload/read/live/write URLs are bearer capabilities. Read URLs need no authenticated socket and can outlive account revocation. Revoking an account cannot retract bytes already copied, read URLs already shared, or an HTTP stream that is already open. Machine room writers recheck active machine admission, exact room scope and membership at start, upload commit, live chunks and completion. Human and non-room writer capabilities retain their upstream lifetime independent of WS auth. Push is disabled, and the plugin aborts its own live writers when a connection fails. An operator handling a disclosure must remove the affected message/upload and assess copies; do not promise token revocation erases attachments. A stricter per-account HTTP-capability policy is not implemented.
 
 ## Local implementation security review
 
@@ -32,5 +32,18 @@ This is a self-review, **not the required independent review**. Findings fixed w
 - Profile-local locking admitted duplicate consumers in different directories: native Hermes credential reservation with same-process exclusion.
 - Refusing a clarification UI left its real open-ended waiter armed: cancel only the exact matching session/request.
 - Frontend defaults/share/terminal links could use public Apron infrastructure, and runtime dependencies had reported vulnerabilities: local build mode, CSP, compatible pinned lock update and real browser checks.
+
+## Supplied independent findings (snapshot `272afba`)
+
+These findings were supplied for isolated local remediation; this is not a claim of a complete
+independent audit or approval of the fixes. Parent review/publication remains outstanding.
+
+| Severity | Finding | Remediation / local evidence |
+|---|---|---|
+| HIGH | Startup membership reconciliation left public room visibility/join/create and live thread metadata open to a machine | Persist exact operator scope; enforce shared visibility, membership grants, creation denial, live deliveries and command/upload/stream targets. `30ccdaa`, `8f263ed`, `d47a451`; private/thread/restart/implicit-target/known-ID/media regressions |
+| MEDIUM | Machine admission expired but active sockets survived | Persisted-deadline timers close every machine connection; dispatch/commit checks reject queued frames; rotation/revocation/shutdown clean timers. `3d440ad`; genuine clock waits and restart/race regressions |
+| HIGH | Reconnect could authenticate replacement token B under token A's consumer lease | Compare lease identity before authentication, stop with fixed nonretryable status and cleanup, require controlled restart. `128b522`; forced reconnect with a real second-process B consumer |
+| MEDIUM | Missing bot ID and malformed room/history/update/receipt data escaped bounded handling | Validate consumed fields/types before indexing/storage; fixed ProtocolErrors, terminal invalid-protocol cleanup, bounded ordinary reconnect. `af8d182`; 80 synthetic-peer cases plus real Hermes/server tests |
+| LOW | Aggregate validation count was stale | Authoritative final totals and exact commands at the top of the execution ledger; earlier numbered results are historical |
 
 Unresolved release blockers include credential removal, safe interactive consent, complete media/tool feature validation, total storage/operational exhaustion controls, crash/power-loss coverage, external low-severity build-tool advisories, independent security review and all approved LAN/device/TLS/recovery drills. No severity is silently converted into a pass.
