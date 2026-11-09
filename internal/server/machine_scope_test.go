@@ -6,8 +6,12 @@ import (
 	"github.com/apron-chat/apron-server-go/apron"
 	"github.com/apron-chat/apron-server-go/store"
 	"github.com/coder/websocket"
+	"io"
+	"net/http"
 	"net/http/httptest"
+	"net/http/httptrace"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -129,5 +133,72 @@ func TestMachineRoomScopeLiveMetadata(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+func TestMachineUploadRechecksTargetMembership(t *testing.T) {
+	for _, stage := range []string{"before-start", "during-body"} {
+		t.Run(stage, func(t *testing.T) {
+			e := &enrolling{machine: rand.Text() + rand.Text()}
+			_, h, _ := enrollmentServer(t, func(c *apron.Config) { c.Extensions = []apron.Extension{e} })
+			bot := dial(t, h.URL)
+			result(t, bot.call(t, "auth", map[string]any{"scheme": "token", "token": e.machine}))
+			receipt := result(t, bot.call(t, "message", map[string]any{"room_id": "general", "body": map[string]any{"text": "upload fixture", "embeds": []any{map[string]any{"kind": "upload"}}}}))
+			capability := receipt["embeds"].([]any)[0].(map[string]any)["write_url"].(string)
+			client := &http.Client{Timeout: 5 * time.Second}
+			var response *http.Response
+			var err error
+			if stage == "before-start" {
+				result(t, bot.call(t, "room_leave", map[string]any{"room_id": "general"}))
+				request, _ := http.NewRequest(http.MethodPut, capability, strings.NewReader("fixture"))
+				response, err = client.Do(request)
+			} else {
+				reader, writer := io.Pipe()
+				defer reader.Close()
+				defer writer.Close()
+				started := make(chan struct{})
+				trace := &httptrace.ClientTrace{Got100Continue: func() { close(started) }}
+				request, _ := http.NewRequestWithContext(httptrace.WithClientTrace(context.Background(), trace), http.MethodPut, capability, reader)
+				request.Header.Set("Expect", "100-continue")
+				type outcome struct {
+					response *http.Response
+					err      error
+				}
+				finished := make(chan outcome, 1)
+				go func() { r, err := client.Do(request); finished <- outcome{r, err} }()
+				select {
+				case <-started:
+				case <-time.After(3 * time.Second):
+					t.Fatal("upload did not enter real body receive")
+				}
+				result(t, bot.call(t, "room_leave", map[string]any{"room_id": "general"}))
+				if _, err = writer.Write([]byte("fixture")); err != nil {
+					t.Fatal("test body write failed")
+				}
+				writer.Close()
+				got := <-finished
+				response, err = got.response, got.err
+			}
+			if err != nil {
+				t.Fatal("test upload request failed")
+			}
+			response.Body.Close()
+			if response.StatusCode != http.StatusGone {
+				t.Fatal("machine upload bypassed target membership", response.StatusCode)
+			}
+			result(t, bot.call(t, "room_join", map[string]any{"room_id": "general"}))
+			history := result(t, bot.call(t, "history", map[string]any{"room_id": "general"}))
+			for _, v := range history["messages"].([]any) {
+				m := v.(map[string]any)
+				if m["message_id"] == receipt["message_id"] {
+					embeds, _ := m["body"].(map[string]any)["embeds"].([]any)
+					for _, v := range embeds {
+						if v.(map[string]any)["url"] != nil {
+							t.Fatal("refused upload published a read capability")
+						}
+					}
+				}
+			}
+		})
 	}
 }

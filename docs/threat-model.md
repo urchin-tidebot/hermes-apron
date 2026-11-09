@@ -17,7 +17,7 @@ The server and operator OS user are trusted; remote clients, account/display nam
 
 ## Capability URL treatment
 
-Upstream upload/read/live/write URLs are bearer capabilities. Read URLs need no authenticated socket and can outlive account revocation. Revoking an account cannot retract bytes already copied, read URLs already shared, or an HTTP stream that is already open. Writer capabilities also have their upstream lifetime independent of WS auth. Push is disabled, and the plugin aborts its own live writers when a connection fails. An operator handling a disclosure must remove the affected message/upload and assess copies; do not promise token revocation erases attachments. A stricter per-account HTTP-capability policy is not implemented.
+Upstream upload/read/live/write URLs are bearer capabilities. Read URLs need no authenticated socket and can outlive account revocation. Revoking an account cannot retract bytes already copied, read URLs already shared, or an HTTP stream that is already open. Machine room writers recheck active machine admission, exact room scope and membership at start, upload commit, live chunks and completion. Human and non-room writer capabilities retain their upstream lifetime independent of WS auth. Push is disabled, and the plugin aborts its own live writers when a connection fails. An operator handling a disclosure must remove the affected message/upload and assess copies; do not promise token revocation erases attachments. A stricter per-account HTTP-capability policy is not implemented.
 
 ## Local implementation security review
 

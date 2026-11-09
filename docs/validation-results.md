@@ -232,3 +232,15 @@ These are Python package artifacts, not a complete audited deployment release.
     can reconnect using the released state/credential locks. Captured old/new transports have
     no tasks, pending RPCs or sockets after failed reconnect. Focused peer/transport/adapter
     suite before the last 13 peer cases: PASS, 91 tests; authoritative final totals follow.
+36. Full upstream race suite caught a compatibility regression in the new candidate filter:
+    `TestRoomListLatestLogIDDeltaPrivateRooms` failed because human private-room removal
+    lost its `left` delta. Narrowed the filter to exact machine policy only, preserving upstream
+    human visibility/membership behavior. Focused upstream race regression PASS.
+    Completing the reviewed media-target path: extended `TestMachineMustBeJoinedToPost` RED
+    allowed a pending `/embed-append` HTTP write to post after machine leave (204). GREEN
+    denies command creation after leave and checks machine room scope/active admission/membership
+    at HTTP write start, upload commit, live chunks and completion. Pending posts also recheck
+    membership. Read capabilities and bytes already shared remain independent bearers.
+    Real HTTP `TestMachineUploadRechecksTargetMembership` covers leave before write start and
+    during body receive (genuine HTTP 100-continue rendezvous), with no read capability published.
+    `tools/go test -race ./internal/server -run '^TestMachine(MustBeJoinedToPost|UploadRechecksTargetMembership|RoomScope)' -count=1`: PASS.

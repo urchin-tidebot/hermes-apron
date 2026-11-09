@@ -45,5 +45,6 @@ Machine expiry has one timer per identity. Binding/restoring schedules the persi
 rotation, revocation and shutdown stop/remove timers. Generation checks make already-runnable
 old callbacks harmless. Dispatch checks the real clock as well, and room/message commit checks
 prevent a frame delayed in an extension filter from writing after expiry. Expiry signs out every
-connection of the machine identity. This does not change the documented independent bearer
-lifetime of HTTP media capabilities already issued.
+connection of the machine identity. Machine room writers also recheck active admission, exact room scope and membership when starting,
+committing uploads, accepting live chunks and completing. Read URLs/previously copied bytes remain
+independent bearers; human and non-room capabilities retain upstream semantics.
