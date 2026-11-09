@@ -36,3 +36,21 @@ revocation and one injected enrollment Apply failure. Failure disconnects before
 has zero half-created users and the unused invitation can enroll. This is not a power-loss test at
 all SQLite internals, nor browser/device evidence. Software authenticators sign real test challenges.
 `tools/go test ./...`: PASS using a fresh materialization of the pinned patch, Go 1.27.0.
+
+7. Safe listener settings: `tools/go test ./internal/server -run TestRejectUnsafeProductionSettings -v`
+   RED accepted `:8080`; GREEN rejects wildcard IPv4/IPv6, insecure production origin,
+   wildcard origin, URL credentials/path, and non-ephemeral test listeners.
+   `tools/go test ./...` PASS; `tools/go build ./cmd/apron-home` PASS.
+8. Browser: `PLAYWRIGHT_NODEJS_PATH="$(command -v node)" LD_LIBRARY_PATH="$(nix eval --raw nixpkgs#stdenv.cc.cc.lib.outPath)/lib" HERMES_APRON_BINARY=<scratch-binary> <scratch-venv>/bin/pytest tests/test_browser.py -q`
+   PASS (1): installed Chromium, real virtual CTAP2 authenticator with resident keys and user
+   verification; local enrollment UI creates an account, a separate native WebAuthn login succeeds,
+   invitation input clears, captured HTTP requests stay on origin. No real passkey/device access.
+   First attempts could not import greenlet's libstdc++ and could not launch Playwright's generic
+   bundled Node on NixOS. These setup failures are not behavioral RED evidence.
+
+Frontend build: pinned server submodule commit 95a6314e2629f0965dd61fa688f7eb1b4abbd26c,
+`npm ci --ignore-scripts && npm run prepare && npm run build` PASS.
+Initial `npm audit --json`: 12 findings (5 low, 2 moderate, 4 high, 1 critical), including DOMPurify
+and Markdown-it. A compatible lockfile update removes moderate/high/critical findings; the
+patched runtime `npm audit --omit=dev --audit-level=moderate` reports zero vulnerabilities.
+Remaining dev-only low findings are still tracked; full frontend test results pending.

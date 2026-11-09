@@ -387,7 +387,7 @@ index 9a507d0..14dc195 100644
  		return
  	}
 diff --git a/apron/sessions.go b/apron/sessions.go
-index 1607547..2fdf811 100644
+index 1607547..d6afad0 100644
 --- a/apron/sessions.go
 +++ b/apron/sessions.go
 @@ -45,6 +45,10 @@ func (s *Server) signInLocked(c *client, req request, user *userState, now time.
@@ -428,15 +428,30 @@ index 1607547..2fdf811 100644
  	session, ok := s.sessions[key]
  	if !ok || session.origin != c.origin || !now.Before(session.expires) {
  		// A temporary token approves its proposal with this scheme too, as
-@@ -136,7 +153,7 @@ func (s *Server) authenticateToken(c *client, req request) (any, *Error) {
+@@ -136,7 +153,10 @@ func (s *Server) authenticateToken(c *client, req request) (any, *Error) {
  	if err := s.admitLocked(session.user); err != nil {
  		return nil, err
  	}
 -	session.expires = now.Add(sessionLifetime)
-+	// Preserve the absolute session expiry on resume.
++	// The closed wrapper bounds sessions absolutely; upstream defaults keep sliding expiry.
++	if s.enrollment == nil {
++		session.expires = now.Add(sessionLifetime)
++	}
  	s.sessions[key] = session
  	s.touchSession(key)
  	c.token = key
+diff --git a/aproncmd/aprond.go b/aproncmd/aprond.go
+index 5d0853e..c242a48 100644
+--- a/aproncmd/aprond.go
++++ b/aproncmd/aprond.go
+@@ -459,3 +459,7 @@ func debugHandler() http.Handler {
+ 	mux.Handle("/debug/vars", expvar.Handler())
+ 	return mux
+ }
++
++// ServerConfig converts the public runner options for wrappers that own their
++// listener and lifecycle. The caller must set Store before calling apron.Open.
++func ServerConfig(options Options) (apron.Config, error) { return serverConfig(options) }
 diff --git a/internal/auth/passkey/passkey.go b/internal/auth/passkey/passkey.go
 index d7355f3..9d74a05 100644
 --- a/internal/auth/passkey/passkey.go

@@ -1,0 +1,33 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Closed Apron enrollment</title>
+<body><h1>Enroll a passkey</h1><p>Paste the short-lived invitation supplied by your local operator. Your authenticator must verify you.</p>
+<label>Invitation <input id="invite" type="password" autocomplete="off" maxlength="128"></label><button id="enroll">Create passkey</button><p id="status" role="status"></p><a href="/">Open local chat</a>
+<script>
+'use strict';
+const status = document.querySelector('#status');
+document.querySelector('#enroll').onclick = async () => {
+ const button = document.querySelector('#enroll'); button.disabled = true;
+ let socket;
+ try {
+  const token = document.querySelector('#invite').value; document.querySelector('#invite').value = '';
+  socket = new WebSocket(location.origin.replace(/^http/, 'ws') + '/ws');
+  const pending = new Map(); let count = 0;
+  const ready = new Promise((resolve, reject) => {
+   const timer = setTimeout(() => reject(new Error()), 10000);
+   socket.onmessage = event => {
+    const frame = JSON.parse(event.data);
+    if (frame.method === 'server') {clearTimeout(timer); resolve();}
+    if (frame.id && pending.has(frame.id)) {const p = pending.get(frame.id); pending.delete(frame.id); clearTimeout(p.timer); frame.error ? p.reject(new Error()) : p.resolve(frame.result);}
+   };
+   socket.onerror = () => reject(new Error());
+  });
+  function rpc(params) {return new Promise((resolve, reject) => {const id = String(++count); const timer = setTimeout(() => {pending.delete(id); reject(new Error());}, 10000); pending.set(id, {resolve, reject, timer}); socket.send(JSON.stringify({method:'auth', id, params}));});}
+  await ready;
+  const begin = await rpc({scheme:'webauthn',action:'register',step:'begin',invitation:token});
+  const publicKey = PublicKeyCredential.parseCreationOptionsFromJSON(begin.public_key);
+  const credential = await navigator.credentials.create({publicKey});
+  await rpc({scheme:'webauthn',action:'register',step:'finish',challenge_id:begin.challenge_id,credential:credential.toJSON()});
+  status.textContent = 'Enrollment complete. Open local chat and sign in with your passkey.';
+ } catch (_) {status.textContent = 'Enrollment failed or was cancelled. Ask your operator to check the invitation.';}
+ finally {if (socket) socket.close(); button.disabled = false;}
+};
+</script></body></html>
