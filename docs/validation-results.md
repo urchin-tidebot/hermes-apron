@@ -453,4 +453,12 @@ The checkout now requests `fetch-depth: 0` while retaining `persist-credentials:
 A configuration regression test parsing the workflow observed RED (1 failed / 1 passed)
 then GREEN (2 passed) with the full-history checkout. Ruff check/format, the local
 content/history audit and `git diff --check` passed. A replacement remote CI result
-must still be verified; these local checks do not retroactively make the first run pass.
+was verified separately below; these local checks do not retroactively make the first run pass.
+
+Replacement [GitHub Actions run 42676319598](https://github.com/urchin-tidebot/hermes-apron/actions/runs/42676319598)
+at exact commit `0b71a5f5e713ce947eda880990c74a56741232cd`: **PASS**, conclusion
+`success` read back through the GitHub API. Wrapper/upstream race suites, vet/gofmt,
+Ruff checks, binary build and content/history audit passed. Frontend completed all
+200 files / 1,691 tests; real Python/browser/plugin suite passed 161 tests (30.67s),
+including the new checkout-history regression. This verifies Ubuntu CI in addition
+to local Nix checks; it does not remove any deployment or missing-feature blocker.
